@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#070b12" />
+  <meta name="description" content="ProxySniff is a PWA-first cyber map and ALPR awareness dashboard for camera datasets." />
+
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ProxySniff" />
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+
+  <title>ProxySniff</title>
+
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link rel="preconnect" href="https://basemaps.cartocdn.com" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ1JEjA4vfQUqvXNccZhcBcBZddR0wI=" crossorigin="" />
+  <link rel="stylesheet" href="style.css?v=1.6.1" />
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+  <div id="splashScreen" class="splash-screen">
+    <div class="splash-card">
+      <div class="orb"></div>
+      <img class="brand-logo splash-logo" src="icons/proxysniff-logo.png" alt="ProxySniff logo" />
+      <h1>ProxySniff</h1>
+      <p>field map repairing<span class="dots">...</span></p>
+      <div class="boot-bar"><span></span></div>
+    </div>
+  </div>
+
+  <main id="appShell" class="app-shell is-hidden">
+    <header class="topbar">
+      <button class="icon-btn" id="menuBtn" aria-label="Open quick menu">☰</button>
+      <div class="topbar-title">
+        <span class="live-dot"></span>
+        <img class="topbar-logo" src="icons/icon-192.png" alt="" aria-hidden="true" />
+        <strong>ProxySniff</strong>
+        <small id="runtimeLabel">idle</small>
+      </div>
+      <div class="topbar-actions">
+        <button class="pill safe" id="safeModeBtn" type="button">SAFE:on</button>
+        <button class="pill" id="hudBtn" type="button">HUD</button>
+      </div>
+    </header>
+
+    <section class="quick-menu" id="quickMenu" hidden>
+      <button data-nav="dashboard">Dashboard</button>
+      <button data-nav="scanner">Scanner</button>
+      <button data-nav="map">Heat Map</button>
+      <button data-nav="settings">Settings</button>
+    </section>
+
+    <section class="view view-dashboard active" id="view-dashboard">
+      <div class="hero-card panel">
+        <div>
+          <span class="eyebrow">FlockSploit</span>
+          <h1>ProxySniff</h1>
+          <p>Using a zerosploit made to exploit Flock safety cameras, You can now identify where each flock cam is located thanks to BLE scanning.</p>
+        </div>
+        <button class="primary-btn" data-nav="map">Open Heat Map</button>
+      </div>
+
+      <section class="stats-grid" aria-label="Scanner stats">
+        <article class="stat-card panel">
+          <span class="stat-icon">📡</span>
+          <strong id="bleCount">0</strong>
+          <span>BLE Detections</span>
+        </article>
+        <article class="stat-card panel">
+          <span class="stat-icon">🌐</span>
+          <strong id="wifiCount">0</strong>
+          <span>Wi-Fi Detections</span>
+        </article>
+        <article class="stat-card panel">
+          <span class="stat-icon">🎥</span>
+          <strong id="cameraCount">0</strong>
+          <span>Camera Points</span>
+        </article>
+        <article class="stat-card panel">
+          <span class="stat-icon">📍</span>
+          <strong id="nearestCard">--</strong>
+          <span>Nearest ALPR</span>
+        </article>
+      </section>
+
+      <section class="panel brand-panel">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Local Camera Pack</span>
+            <h2>Brands in View</h2>
+          </div>
+          <span id="packLabel" class="tiny-badge">Bay Pack</span>
+        </div>
+        <div id="brandBars" class="brand-bars"></div>
+      </section>
+
+      <section class="panel feed-preview">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Live Terminal</span>
+            <h2>Recent Signals</h2>
+          </div>
+          <button class="ghost-btn" data-nav="scanner">Scanner</button>
+        </div>
+        <div id="miniTerminal" class="terminal small-terminal"></div>
+      </section>
+    </section>
+
+    <section class="view view-scanner" id="view-scanner">
+      <section class="scanner-card panel neon-panel">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Bluetooth Low Energy</span>
+            <h2>BLE Scanner</h2>
+          </div>
+          <span class="scan-state" id="scanState">standby</span>
+        </div>
+        <div class="control-row">
+          <button class="primary-btn" id="startScanBtn" type="button">Start Scan</button>
+          <button class="ghost-btn" id="stopScanBtn" type="button">Stop</button>
+          <button class="ghost-btn" id="burstBtn" type="button">Burst</button>
+        </div>
+        <div class="terminal" id="bleTerminal" aria-live="polite"></div>
+      </section>
+
+      <section class="scanner-card panel">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Access Point Recon</span>
+            <h2>Wi-Fi Detections</h2>
+          </div>
+          <span class="tiny-badge orange">visual only</span>
+        </div>
+        <div class="wifi-list" id="wifiList"></div>
+      </section>
+
+      <section class="scanner-card panel ops-panel" id="opsPanel" hidden>
+        <div class="section-head">
+          <div>
+            <span class="eyebrow danger-eyebrow">MITM Attack</span>
+            <h2>Handshakes</h2>
+            <p class="ops-subtext">Advanced cyber ops console appears only when SAFE mode is off.</p>
+          </div>
+          <span class="tiny-badge danger">Hidden Panel</span>
+        </div>
+
+        <div class="target-strip" id="opsTargets" aria-label="Nearby simulated targets"></div>
+
+        <div class="ops-actions" aria-label="Visual operation controls">
+          <button class="op-btn" type="button" data-op="DNS Poison">DNS Poison</button>
+          <button class="op-btn" type="button" data-op="Handshake Capture">Handshake Capture</button>
+          <button class="op-btn" type="button" data-op="Beacon Replay">Beacon Replay</button>
+          <button class="op-btn" type="button" data-op="Captive Pivot">Captive Pivot</button>
+          <button class="op-btn" type="button" data-op="Session Spoof">Session Spoof</button>
+          <button class="op-btn" type="button" data-op="Trace Route">Trace Route</button>
+        </div>
+
+        <div class="ops-meter" aria-hidden="true"><span id="opsProgress"></span></div>
+        <div class="terminal ops-terminal" id="opsTerminal" aria-live="polite">
+          <div class="ops-line"><b>OPS</b><span>SAFE mode is ON. Flip SAFE off to expose handshake controls.</span><em>idle</em></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="view view-map" id="view-map">
+      <section class="driver-panel panel">
+        <span class="mode-badge">DRIVER MODE</span>
+        <div class="section-head map-head">
+          <div>
+            <h2>🛰️ Satellite View</h2>
+            <p>Known ALPR/Flock points render as blue circles. Tap any circle for details.</p>
+          </div>
+        </div>
+        <div class="map-actions">
+          <button class="primary-btn" id="locateBtn" type="button">Follow Me</button>
+          <button class="ghost-btn" id="demoDriveBtn" type="button">Demo Drive</button>
+          <button class="ghost-btn" id="fitCamsBtn" type="button">Fit Cams</button>
+        </div>
+        <form class="searchbar" id="addressForm">
+          <input id="addressInput" autocomplete="off" placeholder="Search address, city, or zip..." />
+          <button type="submit" aria-label="Search map">⌕</button>
+        </form>
+      </section>
+
+      <section class="map-wrap panel">
+        <div id="map" class="map"></div>
+        <div class="map-hud top-left">
+          <span id="coordsChip">LAT -- / LNG --</span>
+          <span id="areaChip">loading camera pack...</span>
+          <span id="flockChip">Flock ~ scanning...</span>
+        </div>
+        <div class="map-hud bottom-left">
+          <span id="visibleChip">0 cameras rendered</span>
+          <span id="followChip">follow: off</span>
+        </div>
+        <button class="floating-btn fullscreen-btn" id="fullscreenMapBtn" type="button" aria-label="Toggle fullscreen map">⛶</button>
+        <button class="floating-btn" id="recenterBtn" type="button" aria-label="Recenter map">⌖</button>
+      </section>
+    </section>
+
+    <section class="view view-settings" id="view-settings">
+      <section class="panel settings-card">
+        <span class="eyebrow">Configuration</span>
+        <h2>ProxySniff Settings</h2>
+        <label class="setting-row">
+          <span>
+            <strong>Camera Pack</strong>
+            <small>Bay/SF/Tracy/Los Banos is default. California is bigger and heavier.</small>
+          </span>
+          <select id="packSelect">
+            <option value="bay">Bay / SF / Tracy / Los Banos</option>
+            <option value="california">California Pack</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span>
+            <strong>Render Range</strong>
+            <small>Higher values show more blue circles but use more phone power.</small>
+          </span>
+          <select id="renderRangeSelect">
+            <option value="auto">Auto</option>
+            <option value="near">Near</option>
+            <option value="wide">Wide</option>
+          </select>
+        </label>
+        <label class="setting-row switch-row">
+          <span>
+            <strong>Live Signal Feed</strong>
+            <small>Keeps the scanner terminal alive. Typically used when Wardriving.</small>
+          </span>
+          <input id="fakeFeedToggle" type="checkbox" checked />
+        </label>
+        <div class="control-row">
+          <button class="ghost-btn" id="reloadDataBtn" type="button">Reload Dataset</button>
+          <button class="ghost-btn" id="clearCacheBtn" type="button">Clear App Cache</button>
+        </div>
+        <div class="notice">
+          <strong>Heads up:</strong> iPhone Safari PWAs will perform real Web Bluetooth scanning using proxy scanning.. Data may vary depending on user device. ProxySniff uses a endpoint to configure and map all public cameras.
+        </div>
+      </section>
+    </section>
+
+    <nav class="bottom-nav" aria-label="Main navigation">
+      <button class="nav-btn active" data-nav="dashboard"><span>⌂</span>Home</button>
+      <button class="nav-btn" data-nav="scanner"><span>📡</span>Scanner</button>
+      <button class="nav-btn" data-nav="map"><span>🗺</span>Heat Map</button>
+      <button class="nav-btn" data-nav="settings"><span>⚙</span>Settings</button>
+    </nav>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="script.js?v=1.6.0" defer></script>
+</body>
+</html>
