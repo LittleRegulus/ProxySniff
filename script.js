@@ -70,8 +70,14 @@
     lastCameraAlertAt: 0,
     speechQueue: [],
     speechSpeaking: false,
+    speechUnlocked: false,
+    speechEnabled: false,
     pins: [],
     activePinDraft: null,
+    placeSearch: {
+      address: { timer: null, items: [], selected: null },
+      destination: { timer: null, items: [], selected: null }
+    },
     safeMode: localStorage.getItem("proxysniff_safe_mode") !== "off",
     opsLines: [],
     opsProgressTimer: null
@@ -100,6 +106,7 @@
     stopScanBtn: $("#stopScanBtn"),
     burstBtn: $("#burstBtn"),
     locateBtn: $("#locateBtn"),
+    voiceBtn: $("#voiceBtn"),
     recenterBtn: $("#recenterBtn"),
     pinSpotBtn: $("#pinSpotBtn"),
     stopNavigationBtn: $("#stopNavigationBtn"),
@@ -120,15 +127,21 @@
     pinForm: $("#pinForm"),
     closePinModalBtn: $("#closePinModalBtn"),
     cancelPinBtn: $("#cancelPinBtn"),
+    pinModalTitle: $("#pinModalTitle"),
     pinNameInput: $("#pinNameInput"),
     pinDescriptionInput: $("#pinDescriptionInput"),
     pinPhotoInput: $("#pinPhotoInput"),
     pinPreview: $("#pinPreview"),
     pinMeta: $("#pinMeta"),
+    removePinPhotoBtn: $("#removePinPhotoBtn"),
+    savePinBtn: $("#savePinBtn"),
+    pinDestinationBtn: $("#pinDestinationBtn"),
     addressForm: $("#addressForm"),
     addressInput: $("#addressInput"),
+    addressSuggestions: $("#addressSuggestions"),
     destinationForm: $("#destinationForm"),
     destinationInput: $("#destinationInput"),
+    destinationSuggestions: $("#destinationSuggestions"),
     packSelect: $("#packSelect"),
     renderRangeSelect: $("#renderRangeSelect"),
     fakeFeedToggle: $("#fakeFeedToggle"),
@@ -173,6 +186,7 @@
     els.stopScanBtn.addEventListener("click", stopScanner);
     els.burstBtn.addEventListener("click", () => burstSignals(8));
     els.locateBtn.addEventListener("click", toggleFollowTracking);
+    els.voiceBtn?.addEventListener("click", toggleVoiceAlerts);
     els.recenterBtn.addEventListener("click", recenterOnUser);
     els.pinSpotBtn.addEventListener("click", openPinModalAtMapCenter);
     els.stopNavigationBtn.addEventListener("click", stopNavigation);
@@ -181,6 +195,8 @@
     els.demoDriveBtn.addEventListener("click", toggleDemoDrive);
     els.addressForm.addEventListener("submit", searchAddress);
     els.destinationForm.addEventListener("submit", routeToDestination);
+    wirePlaceSuggestions("address", els.addressInput, els.addressSuggestions);
+    wirePlaceSuggestions("destination", els.destinationInput, els.destinationSuggestions);
     els.newPinBtn?.addEventListener("click", () => {
       navigate("map");
       setTimeout(openPinModalAtMapCenter, 220);
@@ -188,7 +204,10 @@
     els.closePinModalBtn?.addEventListener("click", closePinModal);
     els.cancelPinBtn?.addEventListener("click", closePinModal);
     els.pinForm?.addEventListener("submit", savePinFromForm);
+    els.pinDestinationBtn?.addEventListener("click", saveDestinationPinFromForm);
+    els.pinNameInput?.addEventListener("input", () => els.pinNameInput.setCustomValidity(""));
     els.pinPhotoInput?.addEventListener("change", handlePinPhotoChange);
+    els.removePinPhotoBtn?.addEventListener("click", removePinDraftPhoto);
     els.packSelect.value = state.activePack;
     els.renderRangeSelect.value = state.renderRange;
     els.packSelect.addEventListener("change", async (event) => {
@@ -218,6 +237,9 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) stopScanner(false);
       else if (state.fakeFeedEnabled) startScanner(false);
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!event.target.closest(".searchbar")) hidePlaceSuggestions();
     });
   }
 
@@ -547,6 +569,46 @@
     setFollowMode(true);
   }
 
+  function getFreshUserPosition(timeout = 8000) {
+    initMapOnce();
+    if (state.lastPosition && Date.now() - state.lastPosition.timestamp < 20000) {
+      return Promise.resolve(state.lastPosition);
+    }
+
+    if (!navigator.geolocation) return Promise.resolve(null);
+    ensureLocationWatch();
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(state.lastPosition || null);
+      }, timeout);
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          onLocation(position);
+          resolve(state.lastPosition);
+        },
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(state.lastPosition || null);
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 5000,
+          timeout
+        }
+      );
+    });
+  }
+
   function onLocation(position) {
     const { latitude, longitude, accuracy, heading } = position.coords;
     state.lastPosition = {
@@ -809,6 +871,306 @@
     state.demoInterval = setInterval(step, 1700);
   }
 
+  function wirePlaceSuggestions(kind, input, list) {
+    if (!input || !list) return;
+    input.addEventListener("input", () => schedulePlaceSuggestions(kind, input, list));
+    input.addEventListener("focus", () => {
+      if (state.placeSearch[kind].items.length) renderPlaceSuggestions(kind, input, list);
+      else schedulePlaceSuggestions(kind, input, list);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") hidePlaceSuggestions(kind);
+    });
+  }
+
+  function schedulePlaceSuggestions(kind, input, list) {
+    const bucket = state.placeSearch[kind];
+    bucket.selected = null;
+    clearTimeout(bucket.timer);
+
+    const query = input.value.trim();
+    if (query.length < 2) {
+      bucket.items = [];
+      hidePlaceSuggestions(kind);
+      return;
+    }
+
+    bucket.timer = setTimeout(async () => {
+      try {
+        if (input.value.trim() !== query) return;
+        const items = await findNearbyPlaceMatches(query);
+        if (input.value.trim() !== query) return;
+        bucket.items = items;
+        renderPlaceSuggestions(kind, input, list);
+      } catch (error) {
+        console.warn("Place suggestions failed:", error);
+        bucket.items = [];
+        hidePlaceSuggestions(kind);
+      }
+    }, 280);
+  }
+
+  async function findNearbyPlaceMatches(query) {
+    initMapOnce();
+    const origin = await getSuggestionOrigin();
+    const searchQuery = normalizePlaceQuery(query);
+    const [localResults, poiResults] = await Promise.all([
+      fetchNominatimSuggestions(searchQuery, origin, 0.28, true).catch(() => []),
+      fetchTargetedPoiSuggestions(query, origin).catch(() => [])
+    ]);
+    const merged = mergePlaceResults([...poiResults, ...localResults]);
+    if (merged.length) return merged;
+
+    return fetchNominatimSuggestions(searchQuery, origin, 0.75, false);
+  }
+
+  async function fetchTargetedPoiSuggestions(query, origin) {
+    const filter = buildTargetedPoiFilter(query);
+    if (!filter) return [];
+
+    const radiusMeters = 16093;
+    const overpassQuery = `[out:json][timeout:5];
+      (
+        ${filter.replaceAll("{{radius}}", radiusMeters).replaceAll("{{lat}}", origin.lat).replaceAll("{{lng}}", origin.lng)}
+      );
+      out center tags 20;`;
+
+    const payload = await fetchOverpassWithTimeout(overpassQuery, 2800);
+    return (payload.elements || [])
+      .map((item) => normalizeOsmElementPlace(item, origin))
+      .filter(Boolean)
+      .sort((a, b) => a.feet - b.feet)
+      .slice(0, 8);
+  }
+
+  async function fetchOverpassWithTimeout(query, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body: query,
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`POI HTTP ${response.status}`);
+      return response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function buildTargetedPoiFilter(query) {
+    const value = query.trim().toLowerCase();
+    if (value === "711" || value === "7 11" || value === "7-11" || value === "7-eleven") {
+      return `
+        nwr(around:{{radius}},{{lat}},{{lng}})["brand"~"7[- ]?Eleven",i];
+        nwr(around:{{radius}},{{lat}},{{lng}})["name"~"7[- ]?Eleven",i];`;
+    }
+    if (value.includes("burger king")) {
+      return `
+        nwr(around:{{radius}},{{lat}},{{lng}})["brand"~"Burger King",i];
+        nwr(around:{{radius}},{{lat}},{{lng}})["name"~"Burger King",i];`;
+    }
+    if (value.includes("safeway")) {
+      return `
+        nwr(around:{{radius}},{{lat}},{{lng}})["brand"~"Safeway",i];
+        nwr(around:{{radius}},{{lat}},{{lng}})["name"~"Safeway",i];`;
+    }
+    if (value === "gas" || value === "fuel" || value.includes("gas station")) {
+      return `nwr(around:{{radius}},{{lat}},{{lng}})["amenity"="fuel"];`;
+    }
+    if (value === "food" || value === "restaurant" || value === "restaurants") {
+      return `
+        nwr(around:{{radius}},{{lat}},{{lng}})["amenity"="restaurant"];
+        nwr(around:{{radius}},{{lat}},{{lng}})["amenity"="fast_food"];`;
+    }
+    return "";
+  }
+
+  async function fetchNominatimSuggestions(searchQuery, origin, pad, bounded) {
+    const viewbox = getSuggestionViewbox(origin.lat, origin.lng, pad);
+    const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&namedetails=1&extratags=1&dedupe=1&limit=12&countrycodes=us&bounded=${bounded ? 1 : 0}&viewbox=${viewbox}&q=${encodeURIComponent(searchQuery)}`;
+    const results = await fetchJsonWithTimeout(url, 4200);
+    const seen = new Set();
+
+    return results
+      .map((result) => normalizePlaceResult(result, origin))
+      .filter((item) => dedupePlaceResult(item, seen))
+      .sort((a, b) => a.feet - b.feet)
+      .slice(0, 8);
+  }
+
+  function mergePlaceResults(items) {
+    const seen = new Set();
+    return items
+      .filter((item) => dedupePlaceResult(item, seen))
+      .sort((a, b) => a.feet - b.feet)
+      .slice(0, 8);
+  }
+
+  function dedupePlaceResult(item, seen) {
+    if (!item) return false;
+    const key = `${item.name.toLowerCase()}|${Math.round(item.lat * 10000)}|${Math.round(item.lng * 10000)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }
+
+  async function fetchJsonWithTimeout(url, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        headers: { "Accept": "application/json" },
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`Suggestions HTTP ${response.status}`);
+      return response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function normalizePlaceQuery(query) {
+    const value = query.trim().toLowerCase();
+    if (value === "711" || value === "7 11" || value === "7-11") return "7-Eleven";
+    if (value === "gas" || value === "fuel" || value === "gas stations") return "gas station";
+    if (value === "food" || value === "restaurants" || value === "restaurant") return "restaurant";
+    if (value === "coffee") return "coffee shop";
+    if (value === "groceries" || value === "grocery") return "grocery store";
+    return query;
+  }
+
+  async function getSuggestionOrigin() {
+    const freshPosition = await getFreshUserPosition(2500);
+    if (freshPosition) return freshPosition;
+    if (state.lastPosition) return state.lastPosition;
+    const center = state.map?.getCenter();
+    return {
+      lat: center?.lat ?? DEFAULT_CENTER[0],
+      lng: center?.lng ?? DEFAULT_CENTER[1]
+    };
+  }
+
+  function getSuggestionViewbox(lat, lng, pad = 0.45) {
+    const left = lng - pad;
+    const right = lng + pad;
+    const top = lat + pad;
+    const bottom = lat - pad;
+    return `${left},${top},${right},${bottom}`;
+  }
+
+  function normalizePlaceResult(result, origin) {
+    const lat = Number(result.lat);
+    const lng = Number(result.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+    const display = result.display_name || "";
+    const parts = display.split(",").map((part) => part.trim()).filter(Boolean);
+    const name = result.namedetails?.name || result.name || parts[0] || "Place";
+    const address = parts.slice(name === parts[0] ? 1 : 0, 4).join(", ") || display || "Address unavailable";
+    const feet = distanceFeet(origin.lat, origin.lng, lat, lng);
+
+    return {
+      lat,
+      lng,
+      name,
+      address,
+      feet,
+      label: display || `${name}, ${address}`
+    };
+  }
+
+  function normalizeOsmElementPlace(item, origin) {
+    const tags = item.tags || {};
+    const lat = Number(item.lat ?? item.center?.lat);
+    const lng = Number(item.lon ?? item.center?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+    const name = tags.name || tags.brand || getPoiFallbackName(tags);
+    const address = formatTaggedAddress(tags) || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const feet = distanceFeet(origin.lat, origin.lng, lat, lng);
+
+    return {
+      lat,
+      lng,
+      name,
+      address,
+      feet,
+      label: `${name}, ${address}`
+    };
+  }
+
+  function getPoiFallbackName(tags) {
+    if (tags.amenity === "fuel") return "Gas Station";
+    if (tags.amenity === "fast_food") return "Fast Food";
+    if (tags.amenity === "restaurant") return "Restaurant";
+    return "Place";
+  }
+
+  function formatTaggedAddress(tags) {
+    const street = tags["addr:street"];
+    const house = tags["addr:housenumber"];
+    const city = tags["addr:city"] || tags["addr:town"] || tags["addr:suburb"];
+    const stateName = tags["addr:state"];
+    const line1 = [house, street].filter(Boolean).join(" ");
+    const line2 = [city, stateName].filter(Boolean).join(", ");
+    return [line1, line2].filter(Boolean).join(", ");
+  }
+
+  function renderPlaceSuggestions(kind, input, list) {
+    const bucket = state.placeSearch[kind];
+    if (!bucket.items.length || input.value.trim().length < 2) {
+      hidePlaceSuggestions(kind);
+      return;
+    }
+
+    list.innerHTML = bucket.items.map((item, index) => `
+      <button class="place-suggestion" type="button" data-place-index="${index}">
+        <strong>${escapeHtml(item.name)}</strong>
+        <span>${escapeHtml(item.address)}</span>
+        <small>${escapeHtml(formatDistance(item.feet))}</small>
+      </button>
+    `).join("");
+
+    list.hidden = false;
+    list.querySelectorAll("[data-place-index]").forEach((btn) => {
+      btn.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        selectPlaceSuggestion(kind, input, list, Number(btn.dataset.placeIndex));
+      });
+    });
+  }
+
+  function selectPlaceSuggestion(kind, input, list, index) {
+    const item = state.placeSearch[kind].items[index];
+    if (!item) return;
+    state.placeSearch[kind].selected = item;
+    input.value = item.label;
+    list.hidden = true;
+    els.runtimeLabel.textContent = `selected ${item.name}`;
+  }
+
+  function hidePlaceSuggestions(kind = null) {
+    const lists = kind
+      ? [kind === "address" ? els.addressSuggestions : els.destinationSuggestions]
+      : [els.addressSuggestions, els.destinationSuggestions];
+    lists.forEach((list) => {
+      if (list) list.hidden = true;
+    });
+  }
+
+  function getSelectedPlace(kind, input) {
+    const selected = state.placeSearch[kind]?.selected;
+    if (!selected || selected.label !== input.value.trim()) return null;
+    return {
+      lat: selected.lat,
+      lng: selected.lng,
+      label: selected.label
+    };
+  }
+
   async function searchAddress(event) {
     event.preventDefault();
     const query = els.addressInput.value.trim();
@@ -817,20 +1179,16 @@
     setFollowMode(false);
     els.runtimeLabel.textContent = "searching map";
     try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
-      const response = await fetch(url, { headers: { "Accept": "application/json" } });
-      const results = await response.json();
-      if (!results.length) {
+      const place = getSelectedPlace("address", els.addressInput) || await geocodePlace(query);
+      hidePlaceSuggestions("address");
+      if (!place) {
         els.runtimeLabel.textContent = "no map result found";
         return;
       }
-      const result = results[0];
-      const lat = Number(result.lat);
-      const lng = Number(result.lon);
-      state.map.setView([lat, lng], 15, { animate: true });
-      const searchLabel = result.display_name.split(",").slice(0, 3).join(",").trim();
+      state.map.setView([place.lat, place.lng], 15, { animate: true });
+      const searchLabel = place.label.split(",").slice(0, 3).join(",").trim();
       state.viewAreaLabel = searchLabel || query;
-      els.runtimeLabel.textContent = `viewing ${result.display_name.split(",").slice(0, 2).join(",").trim()}`;
+      els.runtimeLabel.textContent = `viewing ${place.label.split(",").slice(0, 2).join(",").trim()}`;
       refreshAreaChip();
     } catch (error) {
       console.warn(error);
@@ -840,11 +1198,13 @@
 
   async function routeToDestination(event) {
     event.preventDefault();
+    unlockSpeech(false);
     const query = els.destinationInput.value.trim();
     if (!query) return;
 
     try {
-      const destination = await geocodePlace(query);
+      const destination = getSelectedPlace("destination", els.destinationInput) || await geocodePlace(query);
+      hidePlaceSuggestions("destination");
       if (!destination) {
         initMapOnce();
         els.runtimeLabel.textContent = "destination not found";
@@ -865,13 +1225,27 @@
     els.runtimeLabel.textContent = "routing destination";
     setRouteChip("route: finding destination");
 
-    const origin = getRouteOrigin();
+    const origin = await getRouteOrigin();
+    if (!origin) {
+      els.runtimeLabel.textContent = "GPS needed for route";
+      setRouteChip("route: current location needed");
+      return;
+    }
     setRouteChip("route: mapping drive");
     const route = await fetchDrivingRoute(origin, destination);
     drawRoute(origin, destination, route);
   }
 
   async function geocodePlace(query) {
+    const nearby = await findNearbyPlaceMatches(query);
+    if (nearby.length) {
+      return {
+        lat: nearby[0].lat,
+        lng: nearby[0].lng,
+        label: nearby[0].label
+      };
+    }
+
     const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
     const response = await fetch(url, { headers: { "Accept": "application/json" } });
     if (!response.ok) throw new Error(`Geocode HTTP ${response.status}`);
@@ -885,21 +1259,17 @@
     };
   }
 
-  function getRouteOrigin() {
-    if (state.lastPosition) {
+  async function getRouteOrigin() {
+    const position = await getFreshUserPosition(9000);
+    if (position) {
       return {
-        lat: state.lastPosition.lat,
-        lng: state.lastPosition.lng,
+        lat: position.lat,
+        lng: position.lng,
         label: "Current location"
       };
     }
 
-    const center = state.map?.getCenter();
-    return {
-      lat: center?.lat ?? DEFAULT_CENTER[0],
-      lng: center?.lng ?? DEFAULT_CENTER[1],
-      label: "Map center"
-    };
+    return null;
   }
 
   async function fetchDrivingRoute(origin, destination) {
@@ -975,6 +1345,7 @@
     }
 
     state.activeRoute = { origin, destination, distance: route.distance, duration: route.duration };
+    updatePinDestinationButton();
     const miles = route.distance / 1609.344;
     const minutes = Math.round(route.duration / 60);
     const label = destination.label.split(",").slice(0, 2).join(",").trim();
@@ -998,6 +1369,7 @@
 
   function stopNavigation() {
     state.activeRoute = null;
+    updatePinDestinationButton();
     state.routeLatLngs = [];
     state.routePointDistances = [];
     state.routeSteps = [];
@@ -1044,36 +1416,42 @@
   async function openPinModalAtMapCenter() {
     initMapOnce();
     if (!state.map) return;
-    const center = state.map.getCenter();
+    ensureLocationWatch();
+    const target = getCurrentPinTarget();
     const draft = {
       id: `pin-${Date.now()}-${randInt(1000, 9999)}`,
-      lat: center.lat,
-      lng: center.lng,
+      lat: target.lat,
+      lng: target.lng,
       address: "Looking up address...",
       photo: "",
+      source: target.source,
+      mode: "create",
       createdAt: Date.now()
     };
     state.activePinDraft = draft;
     els.pinForm.reset();
+    els.pinModalTitle.textContent = "Save Spot";
+    els.savePinBtn.textContent = "Save Pin";
     els.pinNameInput.value = "";
     els.pinDescriptionInput.value = "";
-    els.pinPreview.innerHTML = "<span>No photo selected</span>";
-    els.pinMeta.textContent = `${center.lat.toFixed(6)}, ${center.lng.toFixed(6)} • Looking up address...`;
+    renderPinPhotoPreview("");
+    els.pinMeta.textContent = `${target.label}: ${target.lat.toFixed(6)}, ${target.lng.toFixed(6)} - Looking up address...`;
+    updatePinDestinationButton();
     els.pinModal.hidden = false;
     els.pinNameInput.focus();
 
     try {
-      draft.address = await reverseGeocodePoint(center.lat, center.lng);
+      draft.address = await reverseGeocodePoint(target.lat, target.lng);
       if (state.activePinDraft?.id === draft.id) {
         state.activePinDraft.address = draft.address;
-        els.pinMeta.textContent = `${center.lat.toFixed(6)}, ${center.lng.toFixed(6)} • ${draft.address}`;
+        els.pinMeta.textContent = `${target.label}: ${target.lat.toFixed(6)}, ${target.lng.toFixed(6)} - ${draft.address}`;
       }
     } catch (error) {
       console.warn("Pin address lookup failed:", error);
-      draft.address = `Near ${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
+      draft.address = `Near ${target.lat.toFixed(5)}, ${target.lng.toFixed(5)}`;
       if (state.activePinDraft?.id === draft.id) {
         state.activePinDraft.address = draft.address;
-        els.pinMeta.textContent = `${center.lat.toFixed(6)}, ${center.lng.toFixed(6)} • ${draft.address}`;
+        els.pinMeta.textContent = `${target.label}: ${target.lat.toFixed(6)}, ${target.lng.toFixed(6)} - ${draft.address}`;
       }
     }
   }
@@ -1083,27 +1461,111 @@
     els.pinModal.hidden = true;
   }
 
+  function getCurrentPinTarget() {
+    if (state.lastPosition) {
+      return {
+        lat: state.lastPosition.lat,
+        lng: state.lastPosition.lng,
+        label: "Current location",
+        source: "current"
+      };
+    }
+
+    const center = state.map?.getCenter();
+    return {
+      lat: center?.lat ?? DEFAULT_CENTER[0],
+      lng: center?.lng ?? DEFAULT_CENTER[1],
+      label: "Map center",
+      source: "map"
+    };
+  }
+
+  function getDestinationPinTarget() {
+    const destination = state.activeRoute?.destination;
+    if (!destination || !Number.isFinite(destination.lat) || !Number.isFinite(destination.lng)) return null;
+    return {
+      lat: destination.lat,
+      lng: destination.lng,
+      label: "Destination",
+      source: "destination",
+      address: destination.label || "Destination"
+    };
+  }
+
+  function updatePinDestinationButton() {
+    if (!els.pinDestinationBtn) return;
+    els.pinDestinationBtn.hidden = state.activePinDraft?.mode === "edit" || !getDestinationPinTarget();
+  }
+
+  function renderPinPhotoPreview(photo) {
+    if (photo) {
+      els.pinPreview.innerHTML = `<img src="${photo}" alt="Pinned spot preview" />`;
+    } else {
+      els.pinPreview.innerHTML = "<span>No photo selected</span>";
+    }
+    if (els.removePinPhotoBtn) els.removePinPhotoBtn.hidden = !photo;
+  }
+
   async function handlePinPhotoChange(event) {
     const file = event.target.files?.[0];
     if (!file || !state.activePinDraft) return;
     try {
       const dataUrl = await resizeImageFile(file, 420);
       state.activePinDraft.photo = dataUrl;
-      els.pinPreview.innerHTML = `<img src="${dataUrl}" alt="Pinned spot preview" />`;
+      renderPinPhotoPreview(dataUrl);
     } catch (error) {
       console.warn("Pin photo failed:", error);
       els.pinPreview.innerHTML = "<span>Photo could not be loaded</span>";
     }
   }
 
+  function removePinDraftPhoto() {
+    if (!state.activePinDraft) return;
+    state.activePinDraft.photo = "";
+    if (els.pinPhotoInput) els.pinPhotoInput.value = "";
+    renderPinPhotoPreview("");
+  }
+
+  function validatePinName() {
+    const name = els.pinNameInput.value.trim();
+    if (name) {
+      els.pinNameInput.setCustomValidity("");
+      return name;
+    }
+
+    els.pinNameInput.setCustomValidity("Add a name before saving this pinned location.");
+    els.pinNameInput.reportValidity();
+    els.runtimeLabel.textContent = "pin needs a name";
+    return "";
+  }
+
   function savePinFromForm(event) {
     event.preventDefault();
+    if (state.activePinDraft?.mode === "edit") {
+      saveEditedPinFromForm();
+      return;
+    }
+    savePinWithTarget(getCurrentPinTarget());
+  }
+
+  function saveDestinationPinFromForm(event) {
+    event.preventDefault();
+    const target = getDestinationPinTarget();
+    if (target) savePinWithTarget(target);
+  }
+
+  function savePinWithTarget(target) {
     const draft = state.activePinDraft;
-    if (!draft) return;
+    const name = validatePinName();
+    if (!draft || !name) return;
 
     const pin = {
       ...draft,
-      name: els.pinNameInput.value.trim() || "Pinned spot",
+      lat: target.lat,
+      lng: target.lng,
+      address: target.address || draft.address,
+      source: target.source,
+      name,
       description: els.pinDescriptionInput.value.trim(),
       updatedAt: Date.now()
     };
@@ -1112,7 +1574,49 @@
     closePinModal();
     renderPinnedSpots();
     renderPinMarkers();
-    els.runtimeLabel.textContent = "pin saved";
+    els.runtimeLabel.textContent = target.source === "destination" ? "destination pinned" : "pin saved";
+  }
+
+  function openEditPinModal(id) {
+    const pin = state.pins.find((item) => item.id === id);
+    if (!pin) return;
+
+    state.activePinDraft = {
+      ...pin,
+      mode: "edit"
+    };
+    els.pinForm.reset();
+    els.pinModalTitle.textContent = "Edit Spot";
+    els.savePinBtn.textContent = "Save Changes";
+    els.pinNameInput.value = pin.name || "";
+    els.pinDescriptionInput.value = pin.description || "";
+    renderPinPhotoPreview(pin.photo || "");
+    els.pinMeta.textContent = `${pin.lat.toFixed(6)}, ${pin.lng.toFixed(6)} - ${pin.address || "Address unavailable"}`;
+    updatePinDestinationButton();
+    els.pinModal.hidden = false;
+    els.pinNameInput.focus();
+  }
+
+  function saveEditedPinFromForm() {
+    const draft = state.activePinDraft;
+    const name = validatePinName();
+    if (!draft || !name) return;
+
+    const index = state.pins.findIndex((pin) => pin.id === draft.id);
+    if (index === -1) return;
+
+    state.pins[index] = {
+      ...state.pins[index],
+      name,
+      description: els.pinDescriptionInput.value.trim(),
+      photo: draft.photo || "",
+      updatedAt: Date.now()
+    };
+    savePins();
+    closePinModal();
+    renderPinnedSpots();
+    renderPinMarkers();
+    els.runtimeLabel.textContent = "pin updated";
   }
 
   function renderPinnedSpots() {
@@ -1139,6 +1643,7 @@
         <div class="pin-actions">
           <button class="primary-btn" type="button" data-pin-route="${escapeHtml(pin.id)}">Route</button>
           <button class="ghost-btn" type="button" data-pin-view="${escapeHtml(pin.id)}">View</button>
+          <button class="ghost-btn" type="button" data-pin-edit="${escapeHtml(pin.id)}">Edit</button>
           <button class="ghost-btn danger-ghost" type="button" data-pin-delete="${escapeHtml(pin.id)}">Delete</button>
         </div>
       </article>
@@ -1146,6 +1651,7 @@
 
     $$("[data-pin-route]").forEach((btn) => btn.addEventListener("click", () => routeToSavedPin(btn.dataset.pinRoute)));
     $$("[data-pin-view]").forEach((btn) => btn.addEventListener("click", () => viewSavedPin(btn.dataset.pinView)));
+    $$("[data-pin-edit]").forEach((btn) => btn.addEventListener("click", () => openEditPinModal(btn.dataset.pinEdit)));
     $$("[data-pin-delete]").forEach((btn) => btn.addEventListener("click", () => deleteSavedPin(btn.dataset.pinDelete)));
   }
 
@@ -1427,6 +1933,10 @@
 
   function enqueueSpeech(text, type = "info") {
     if (!("speechSynthesis" in window) || !window.SpeechSynthesisUtterance) return;
+    if (!state.speechUnlocked || !state.speechEnabled) {
+      els.runtimeLabel.textContent = "tap Voice for alerts";
+      return;
+    }
     const item = { text, type };
     if (type === "direction") {
       const firstNonDirection = state.speechQueue.findIndex((queued) => queued.type !== "direction");
@@ -1436,6 +1946,69 @@
       state.speechQueue.push(item);
     }
     speakNext();
+  }
+
+  function toggleVoiceAlerts() {
+    if (state.speechEnabled) {
+      state.speechEnabled = false;
+      state.speechQueue = [];
+      state.speechSpeaking = false;
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      updateVoiceButton();
+      els.runtimeLabel.textContent = "voice alerts off";
+      return;
+    }
+
+    unlockSpeech(true);
+  }
+
+  function unlockSpeech(announce = false) {
+    if (!("speechSynthesis" in window) || !window.SpeechSynthesisUtterance) {
+      els.runtimeLabel.textContent = "voice unavailable";
+      return false;
+    }
+
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(announce ? "Voice alerts on." : " ");
+      utterance.rate = 0.95;
+      utterance.pitch = 1;
+      utterance.volume = announce ? 1 : 0.01;
+      utterance.onend = () => {
+        state.speechSpeaking = false;
+      };
+      utterance.onerror = () => {
+        state.speechSpeaking = false;
+      };
+      state.speechUnlocked = true;
+      state.speechEnabled = true;
+      state.speechSpeaking = true;
+      window.speechSynthesis.speak(utterance);
+      updateVoiceButton();
+      els.runtimeLabel.textContent = "voice alerts on";
+      return true;
+    } catch (error) {
+      console.warn("Voice unlock failed:", error);
+      els.runtimeLabel.textContent = "voice blocked";
+      return false;
+    }
+  }
+
+  function updateVoiceButton() {
+    if (!els.voiceBtn) return;
+
+    if (!state.speechUnlocked) {
+      els.voiceBtn.textContent = "Voice";
+      els.voiceBtn.classList.remove("following");
+      els.voiceBtn.classList.remove("voice-off");
+      els.voiceBtn.setAttribute("aria-pressed", "false");
+      return;
+    }
+
+    els.voiceBtn.textContent = state.speechEnabled ? "Voice On" : "Voice Off";
+    els.voiceBtn.classList.toggle("following", state.speechEnabled);
+    els.voiceBtn.classList.toggle("voice-off", !state.speechEnabled);
+    els.voiceBtn.setAttribute("aria-pressed", state.speechEnabled ? "true" : "false");
   }
 
   function speakNext() {

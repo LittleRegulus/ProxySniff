@@ -179,12 +179,14 @@
         </div>
         <div class="map-actions">
           <button class="primary-btn" id="locateBtn" type="button">Follow Me</button>
+          <button class="ghost-btn" id="voiceBtn" type="button">Voice</button>
           <button class="ghost-btn" id="demoDriveBtn" type="button">Demo Drive</button>
           <button class="ghost-btn" id="fitCamsBtn" type="button">Fit Cams</button>
         </div>
         <form class="searchbar" id="addressForm">
           <input id="addressInput" autocomplete="off" placeholder="Search address, city, or zip..." />
           <button type="submit" aria-label="Search map">⌕</button>
+          <div class="place-suggestions" id="addressSuggestions" hidden></div>
         </form>
         <form class="searchbar route-searchbar" id="destinationForm">
           <label for="destinationInput">Enter your destination</label>
@@ -192,6 +194,7 @@
             <input id="destinationInput" autocomplete="off" placeholder="Route to address or place..." />
             <button type="submit" aria-label="Map route">⌕</button>
           </div>
+          <div class="place-suggestions" id="destinationSuggestions" hidden></div>
         </form>
       </section>
 
@@ -283,7 +286,7 @@
         <div class="section-head">
           <div>
             <span class="eyebrow">Map Pin</span>
-            <h2>Save Spot</h2>
+            <h2 id="pinModalTitle">Save Spot</h2>
           </div>
           <button class="icon-btn" id="closePinModalBtn" type="button" aria-label="Close pin editor">×</button>
         </div>
@@ -297,14 +300,16 @@
         </label>
         <label>
           <span>Photo</span>
-          <input id="pinPhotoInput" type="file" accept="image/*" capture="environment" />
+          <input id="pinPhotoInput" type="file" accept="image/*" />
         </label>
         <div class="pin-preview" id="pinPreview">
           <span>No photo selected</span>
         </div>
+        <button class="ghost-btn pin-remove-photo-btn" id="removePinPhotoBtn" type="button" hidden>Delete Thumbnail</button>
         <div class="pin-meta" id="pinMeta">Location waiting...</div>
         <div class="control-row">
-          <button class="primary-btn" type="submit">Save Pin</button>
+          <button class="primary-btn" id="savePinBtn" type="submit">Save Pin</button>
+          <button class="ghost-btn pin-destination-btn" id="pinDestinationBtn" type="button" hidden>Pin Destination</button>
           <button class="ghost-btn" id="cancelPinBtn" type="button">Cancel</button>
         </div>
       </form>
