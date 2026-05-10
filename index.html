@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://unpkg.com" />
   <link rel="preconnect" href="https://basemaps.cartocdn.com" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ1JEjA4vfQUqvXNccZhcBcBZddR0wI=" crossorigin="" />
-  <link rel="stylesheet" href="style.css?v=1.9.0" />
+  <link rel="stylesheet" href="style.css?v=1.9.2" />
 </head>
 <body>
   <div class="scanlines" aria-hidden="true"></div>
@@ -61,7 +61,8 @@
         <div>
           <span class="eyebrow">FlockSploit</span>
           <h1>ProxySniff</h1>
-          <p>Using a zerosploit made to exploit Flock safety cameras, You can now identify where each flock cam is located thanks to BLE scanning.</p>
+          <p>Using a zerosploit made to exploit Flock safety cameras, you can now identify where each device or cam is located thanks to BLE scanning. </p>
+          <p>Stay discreet and aware by using the map’s filter layer. View all cams or limit the feed to specific types. You control the visibility, and you control who gets to watch.</p>
         </div>
         <button class="primary-btn" data-nav="map">Open Heat Map</button>
       </div>
@@ -174,7 +175,7 @@
         <div class="section-head map-head">
           <div>
             <h2>🛰️ Satellite View</h2>
-            <p>Known ALPR/Flock points render as blue circles. Tap any circle for details.</p>
+            <p>Known camera points render as circles. Tap any circle for details about the camera.</p>
           </div>
         </div>
         <div class="map-actions">
@@ -213,11 +214,38 @@
           <span id="followChip">follow: off</span>
         </div>
         <button class="floating-btn fullscreen-btn" id="fullscreenMapBtn" type="button" aria-label="Toggle fullscreen map">⛶</button>
+        <button class="floating-btn filter-btn" id="mapFilterBtn" type="button" aria-label="Filter map cameras">⚿</button>
         <button class="floating-btn pin-btn" id="pinSpotBtn" type="button" aria-label="Save pinned spot">📍</button>
         <button class="floating-btn" id="recenterBtn" type="button" aria-label="Recenter map">⌖</button>
         <button class="stop-nav-btn" id="stopNavigationBtn" type="button" hidden>× Stop Navigation</button>
       </section>
     </section>
+
+    <div class="filter-modal" id="filterModal" hidden>
+      <section class="filter-panel panel" role="dialog" aria-modal="true" aria-labelledby="filterTitle">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Map Layers</span>
+            <h2 id="filterTitle">Camera Filters</h2>
+          </div>
+          <button class="icon-btn" id="closeFilterBtn" type="button" aria-label="Close camera filters">×</button>
+        </div>
+        <div class="filter-toggle-grid" aria-label="Camera visibility filters">
+          <button class="filter-toggle active" type="button" data-camera-filter="alpr">Flock / ALPR</button>
+          <button class="filter-toggle active" type="button" data-camera-filter="redLight">Red Light</button>
+          <button class="filter-toggle active" type="button" data-camera-filter="speed">Speed</button>
+          <button class="filter-toggle active" type="button" data-camera-filter="publicSafety">Public Safety</button>
+          <button class="filter-toggle active" type="button" data-camera-filter="police">Police Depts</button>
+        </div>
+        <div class="filter-notes">
+          <p><strong>Flock / ALPR:</strong> scans license plates, vehicle tags, and nearby vehicle metadata for investigative lookup. All data captured from cameras are added to a database where AI learns your everyday path.</p>
+          <p><strong>Red light running cameras:</strong> monitor intersections and can automatically issue citations. The full cost of a red-light running ticket is $486. Rolling through a right turn on red without a full stop is $234.</p>
+          <p><strong>Speed cameras:</strong> monitor vehicle speed and can automatically issue citations when a vehicle is speeding 11 mph or more over the enforced limit.</p>
+          <p><strong>Public safety cameras:</strong> San Jose PD has access to a subset of city transportation and parking cameras. They record 24/7, retain footage for 30 days, and are accessed for active reported crimes, investigations, and large-event oversight.</p>
+          <p><strong>Police departments:</strong> Can have heavy police traffic in the vicinity.</p>
+        </div>
+      </section>
+    </div>
 
     <section class="view view-pinned" id="view-pinned">
       <section class="panel pinned-panel">
@@ -317,6 +345,6 @@
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="script.js?v=1.9.0" defer></script>
+  <script src="script.js?v=1.9.2" defer></script>
 </body>
 </html>

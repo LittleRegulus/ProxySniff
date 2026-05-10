@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const APP_VERSION = "1.9.0";
+  const APP_VERSION = "1.9.2";
   const PINS_STORAGE_KEY = "proxysniff_pinned_spots";
 
   const CAMERA_PACKS = {
@@ -19,15 +19,51 @@
   const DEFAULT_ZOOM = 10;
   const MAX_RENDERED_MARKERS = 1600;
   const NEARBY_FEET = 650;
+  const ALERT_BANDS = [
+    { id: "20yd", feet: 60, label: "20 yards" },
+    { id: "50yd", feet: 150, label: "50 yards" },
+    { id: "100yd", feet: 300, label: "100 yards" }
+  ];
+  const ROUTE_ALERT_LATERAL_FEET = 160;
+  const POLICE_ALERT_RADIUS_FEET = 300;
+  const SAFETY_CAMERA_URL = "https://geo.sanjoseca.gov/server/rest/services/DOT/DOT_TrafficSignalsParkingOpsLayers/MapServer/26/query?f=geojson&where=CAMERATYPE%20in%20(%27Speed%27,%27Red%20Light%27)&outFields=*&outSR=4326";
+  const PUBLIC_SAFETY_CAMERA_URL = "https://geo.sanjoseca.gov/server/rest/services/POL/POL_AllReferenceLayers/MapServer/0/query?f=geojson&where=1%3D1&outFields=*&outSR=4326";
+  const POLICE_STATION_SEEDS = [
+    { id: "police-milpitas", name: "Milpitas Police Department", address: "1275 N Milpitas Blvd, Milpitas, CA 95035", lat: 37.4493062, lng: -121.9101782 },
+    { id: "police-sjpd", name: "San Jose Police Department", address: "201 W Mission St, San Jose, CA 95110", lat: 37.3493783, lng: -121.9056386 },
+    { id: "police-santa-clara-main", name: "Santa Clara Police Department", address: "601 El Camino Real, Santa Clara, CA 95050", lat: 37.3538017, lng: -121.9386925 },
+    { id: "police-santa-clara-rivermark", name: "Santa Clara Police Department - Northside Substation", address: "3992 Rivermark Pkwy, Santa Clara, CA 95054", lat: 37.395335, lng: -121.9476682 },
+    { id: "police-sunnyvale", name: "Sunnyvale Department of Public Safety", address: "700 All America Way, Sunnyvale, CA 94086", lat: 37.37049, lng: -122.0400242 },
+    { id: "police-campbell", name: "Campbell Police Department", address: "70 N 1st St, Campbell, CA 95008", lat: 37.2884256, lng: -121.9441054 },
+    { id: "police-saratoga", name: "Saratoga Sheriff's Office", address: "14000 Fruitvale Ave, Saratoga, CA 95070", lat: 37.2637874, lng: -122.0097039 },
+    { id: "police-mountain-view", name: "Mountain View Police Department", address: "1000 Villa St, Mountain View, CA 94041", lat: 37.3956149, lng: -122.0816463 },
+    { id: "police-los-gatos", name: "Los Gatos-Monte Sereno Police Department", address: "110 E Main St, Los Gatos, CA 95030", lat: 37.2205648, lng: -121.9787928 },
+    { id: "police-palo-alto", name: "Palo Alto Police Department", address: "275 Forest Ave, Palo Alto, CA 94301", lat: 37.4440922, lng: -122.1595487 },
+    { id: "police-redwood-city", name: "Redwood City Police Department", address: "1301 Maple St, Redwood City, CA 94063", lat: 37.493147, lng: -122.2207994 },
+    { id: "police-san-mateo", name: "San Mateo Police Department", address: "200 Franklin Pkwy, San Mateo, CA 94403", lat: 37.5420913, lng: -122.291852 },
+    { id: "police-san-bruno", name: "San Bruno Police Department", address: "1177 Huntington Ave E, San Bruno, CA 94066", lat: 37.6373409, lng: -122.4155736 },
+    { id: "police-colma", name: "Colma Police Department", address: "1199 El Camino Real, Colma, CA 94014", lat: 37.6771957, lng: -122.4584096 },
+    { id: "police-daly-city", name: "Daly City Police Department", address: "333 90th St, Daly City, CA 94015", lat: 37.6904964, lng: -122.4735052 }
+  ];
 
   const state = {
     currentView: "dashboard",
     cameras: [],
+    safetyCameras: [],
+    publicSafetyCameras: [],
+    policeStations: [...POLICE_STATION_SEEDS],
     renderedMarkers: new Map(),
+    renderedSafetyMarkers: new Map(),
+    renderedPublicSafetyMarkers: new Map(),
+    renderedPoliceMarkers: new Map(),
     map: null,
     cameraLayer: null,
+    safetyCameraLayer: null,
+    publicSafetyCameraLayer: null,
+    policeStationLayer: null,
     routeLayer: null,
     routeCameraLayer: null,
+    routeSafetyCameraLayer: null,
     pinLayer: null,
     userMarker: null,
     destinationMarker: null,
@@ -55,10 +91,18 @@
     wifiTotal: 0,
     mapReady: false,
     mapFullscreen: false,
+    cameraFilters: {
+      alpr: true,
+      redLight: true,
+      speed: true,
+      publicSafety: true,
+      police: true
+    },
     activeRoute: null,
     routeLatLngs: [],
     routePointDistances: [],
     routeSteps: [],
+    lastRouteProgressIndex: 0,
     routeStartedAt: 0,
     routeEtaAnnounceInterval: 0,
     lastEtaAnnounceAt: 0,
@@ -66,6 +110,7 @@
     lastStreetAnnounceAt: 0,
     spokenStepIds: new Set(),
     routeCameraIds: new Set(),
+    routeSafetyCameraIds: new Set(),
     cameraAlertHistory: new Set(),
     lastCameraAlertAt: 0,
     speechQueue: [],
@@ -109,6 +154,9 @@
     voiceBtn: $("#voiceBtn"),
     recenterBtn: $("#recenterBtn"),
     pinSpotBtn: $("#pinSpotBtn"),
+    mapFilterBtn: $("#mapFilterBtn"),
+    filterModal: $("#filterModal"),
+    closeFilterBtn: $("#closeFilterBtn"),
     stopNavigationBtn: $("#stopNavigationBtn"),
     fullscreenMapBtn: $("#fullscreenMapBtn"),
     demoDriveBtn: $("#demoDriveBtn"),
@@ -166,6 +214,9 @@
     renderPinnedSpots();
     startScanner();
     await loadCameraPack(state.activePack);
+    loadSafetyCameras();
+    loadPublicSafetyCameras();
+    loadPoliceStations();
     setTimeout(() => {
       els.splash.classList.add("done");
       els.app.classList.remove("is-hidden");
@@ -173,7 +224,7 @@
     }, 900);
 
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
-      navigator.serviceWorker.register("./service-worker.js?v=1.9.0").catch(() => {});
+      navigator.serviceWorker.register("./service-worker.js?v=1.9.2").catch(() => {});
     }
   }
 
@@ -189,6 +240,12 @@
     els.voiceBtn?.addEventListener("click", toggleVoiceAlerts);
     els.recenterBtn.addEventListener("click", recenterOnUser);
     els.pinSpotBtn.addEventListener("click", openPinModalAtMapCenter);
+    els.mapFilterBtn?.addEventListener("click", openFilterModal);
+    els.closeFilterBtn?.addEventListener("click", closeFilterModal);
+    els.filterModal?.addEventListener("click", (event) => {
+      if (event.target === els.filterModal) closeFilterModal();
+    });
+    $$("[data-camera-filter]").forEach((btn) => btn.addEventListener("click", () => toggleCameraFilter(btn.dataset.cameraFilter)));
     els.stopNavigationBtn.addEventListener("click", stopNavigation);
     els.fullscreenMapBtn.addEventListener("click", toggleMapFullscreen);
     els.fitCamsBtn.addEventListener("click", fitCameraBounds);
@@ -256,11 +313,17 @@
       setTimeout(() => {
         state.map?.invalidateSize();
         renderVisibleCameras();
+        renderSafetyCameras();
+        renderPublicSafetyCameras();
+        renderPoliceStations();
         renderPinMarkers();
       }, 150);
       setTimeout(() => {
         state.map?.invalidateSize();
         renderVisibleCameras();
+        renderSafetyCameras();
+        renderPublicSafetyCameras();
+        renderPoliceStations();
         renderPinMarkers();
       }, 650);
     }
@@ -339,6 +402,133 @@
     return JSON.parse(trimmed);
   }
 
+  async function loadSafetyCameras() {
+    try {
+      const payload = await fetchJsonWithTimeout(SAFETY_CAMERA_URL, 9000);
+      state.safetyCameras = normalizeSafetyCameraData(payload);
+      renderSafetyCameras();
+      els.runtimeLabel.textContent = `${formatNumber(state.safetyCameras.length)} safety cams ready`;
+    } catch (error) {
+      console.warn("Safety camera layer failed:", error);
+    }
+  }
+
+  async function loadPublicSafetyCameras() {
+    try {
+      const payload = await fetchJsonWithTimeout(PUBLIC_SAFETY_CAMERA_URL, 12000);
+      state.publicSafetyCameras = normalizePublicSafetyCameraData(payload);
+      renderPublicSafetyCameras();
+      els.runtimeLabel.textContent = `${formatNumber(state.publicSafetyCameras.length)} public safety cams ready`;
+    } catch (error) {
+      console.warn("Public safety camera layer failed:", error);
+    }
+  }
+
+  async function loadPoliceStations() {
+    state.policeStations = mergePoliceStations(POLICE_STATION_SEEDS);
+    renderPoliceStations();
+
+    try {
+      const osmStations = await fetchPoliceStationsFromOsm();
+      state.policeStations = mergePoliceStations([...POLICE_STATION_SEEDS, ...osmStations]);
+      renderPoliceStations();
+    } catch (error) {
+      console.warn("Police station lookup failed:", error);
+    }
+  }
+
+  async function fetchPoliceStationsFromOsm() {
+    const overpassQuery = `
+      [out:json][timeout:8];
+      (
+        nwr["amenity"="police"](36.85,-122.58,37.95,-120.65);
+        nwr["name"~"Police|Sheriff|Public Safety",i](36.85,-122.58,37.95,-120.65);
+      );
+      out center tags 200;`;
+    const payload = await fetchOverpassWithTimeout(overpassQuery, 8500);
+    return (payload.elements || []).map(normalizeOsmPoliceStation).filter(Boolean);
+  }
+
+  function normalizeOsmPoliceStation(item) {
+    const tags = item.tags || {};
+    const lat = Number(item.lat ?? item.center?.lat);
+    const lng = Number(item.lon ?? item.center?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const name = tags.name || tags.operator || "Police Department";
+    return {
+      id: `police-osm-${item.type || "node"}-${item.id || `${lat},${lng}`}`,
+      name,
+      address: formatTaggedAddress(tags) || tags["addr:full"] || "",
+      lat,
+      lng,
+      source: "OpenStreetMap"
+    };
+  }
+
+  function mergePoliceStations(items) {
+    const merged = [];
+    const seen = new Set();
+    for (const item of items) {
+      if (!item || !Number.isFinite(Number(item.lat)) || !Number.isFinite(Number(item.lng))) continue;
+      const nameKey = (item.name || "police").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const coordKey = `${Number(item.lat).toFixed(4)},${Number(item.lng).toFixed(4)}`;
+      const key = `${nameKey}:${coordKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({
+        ...item,
+        id: item.id || `police-${key}`,
+        lat: Number(item.lat),
+        lng: Number(item.lng),
+        source: item.source || "Pinned department list"
+      });
+    }
+    return merged;
+  }
+
+  function normalizeSafetyCameraData(payload) {
+    return (payload.features || []).map((feature) => {
+      const coords = feature.geometry?.coordinates || [];
+      const lng = Number(coords[0]);
+      const lat = Number(coords[1]);
+      const props = feature.properties || {};
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      const cameraType = props.CAMERATYPE || "Safety";
+      return {
+        id: `safety-${props.OBJECTID ?? feature.id ?? `${lat},${lng}`}`,
+        lat,
+        lng,
+        name: props.NAME || props.LOCATION || `${cameraType} Camera`,
+        location: props.LOCATION || props.NAME || "San Jose",
+        type: cameraType,
+        direction: props.TRAVELDIRECTION || "",
+        status: props.STATUS || "",
+        district: props.COUNCILDISTRICT ?? "",
+        equityScore: props.EQUITYSCORE || "",
+        source: "City of San Jose DOT"
+      };
+    }).filter(Boolean);
+  }
+
+  function normalizePublicSafetyCameraData(payload) {
+    return (payload.features || []).map((feature) => {
+      const coords = feature.geometry?.coordinates || [];
+      const props = feature.properties || {};
+      const lng = Number(coords[0] ?? props.LONGITUDE);
+      const lat = Number(coords[1] ?? props.LATITUDE);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return {
+        id: `public-safety-${props.OBJECTID ?? feature.id ?? `${lat},${lng}`}`,
+        lat,
+        lng,
+        name: props.CAMERANAME || `Public Safety Camera ${props.CAMERANUMBER || ""}`.trim(),
+        number: props.CAMERANUMBER ?? "",
+        notes: props.NOTES || "",
+        source: "City of San Jose Police Department"
+      };
+    }).filter(Boolean);
+  }
+
   function normalizeCameraData(raw) {
     if (raw?.type === "FeatureCollection" && Array.isArray(raw.features)) {
       return raw.features.map((feature, index) => {
@@ -414,19 +604,37 @@
 
     L.control.zoom({ position: "bottomright" }).addTo(state.map);
     state.cameraLayer = L.layerGroup().addTo(state.map);
+    state.safetyCameraLayer = L.layerGroup().addTo(state.map);
+    state.publicSafetyCameraLayer = L.layerGroup().addTo(state.map);
+    state.policeStationLayer = L.layerGroup().addTo(state.map);
     state.routeLayer = L.layerGroup().addTo(state.map);
     state.routeCameraLayer = L.layerGroup().addTo(state.map);
+    state.routeSafetyCameraLayer = L.layerGroup().addTo(state.map);
     state.pinLayer = L.layerGroup().addTo(state.map);
-    state.map.on("moveend zoomend", renderVisibleCameras);
+    state.map.on("moveend zoomend", () => {
+      renderVisibleCameras();
+      renderSafetyCameras();
+      renderPublicSafetyCameras();
+      renderPoliceStations();
+    });
     state.map.on("dragstart", () => {
       if (state.followUser) setFollowMode(false);
     });
     renderVisibleCameras();
+    renderSafetyCameras();
+    renderPublicSafetyCameras();
+    renderPoliceStations();
     renderPinMarkers();
   }
 
   function renderVisibleCameras() {
     if (!state.mapReady || !state.map || !state.cameraLayer || !state.cameras.length) return;
+    if (!state.cameraFilters.alpr) {
+      state.cameraLayer.clearLayers();
+      state.renderedMarkers.clear();
+      els.visibleChip.textContent = "0 cameras rendered";
+      return;
+    }
     const bounds = getExpandedBounds();
     const zoom = state.map.getZoom();
     const candidates = [];
@@ -464,6 +672,96 @@
     els.visibleChip.textContent = `${formatNumber(state.renderedMarkers.size)} cameras rendered`;
   }
 
+  function renderSafetyCameras() {
+    if (!state.mapReady || !state.map || !state.safetyCameraLayer || !state.safetyCameras.length) return;
+    const bounds = getExpandedBounds();
+    const visible = state.safetyCameras.filter((cam) => bounds.contains([cam.lat, cam.lng]) && safetyCameraFilterEnabled(cam));
+    const visibleIds = new Set(visible.map((cam) => cam.id));
+
+    for (const [id, marker] of state.renderedSafetyMarkers.entries()) {
+      if (!visibleIds.has(id)) {
+        state.safetyCameraLayer.removeLayer(marker);
+        state.renderedSafetyMarkers.delete(id);
+      }
+    }
+
+    for (const cam of visible) {
+      if (state.renderedSafetyMarkers.has(cam.id)) continue;
+      const marker = L.circleMarker([cam.lat, cam.lng], safetyCameraMarkerStyle(cam, false));
+      marker.bindPopup(createSafetyCameraPopup(cam));
+      marker.addTo(state.safetyCameraLayer);
+      state.renderedSafetyMarkers.set(cam.id, marker);
+    }
+  }
+
+  function renderPublicSafetyCameras() {
+    if (!state.mapReady || !state.map || !state.publicSafetyCameraLayer || !state.publicSafetyCameras.length) return;
+    if (!state.cameraFilters.publicSafety) {
+      state.publicSafetyCameraLayer.clearLayers();
+      state.renderedPublicSafetyMarkers.clear();
+      return;
+    }
+
+    const bounds = getExpandedBounds();
+    const visible = state.publicSafetyCameras.filter((cam) => bounds.contains([cam.lat, cam.lng]));
+    const visibleIds = new Set(visible.map((cam) => cam.id));
+
+    for (const [id, marker] of state.renderedPublicSafetyMarkers.entries()) {
+      if (!visibleIds.has(id)) {
+        state.publicSafetyCameraLayer.removeLayer(marker);
+        state.renderedPublicSafetyMarkers.delete(id);
+      }
+    }
+
+    for (const cam of visible) {
+      if (state.renderedPublicSafetyMarkers.has(cam.id)) continue;
+      const marker = L.circleMarker([cam.lat, cam.lng], publicSafetyCameraMarkerStyle());
+      marker.bindPopup(createPublicSafetyCameraPopup(cam));
+      marker.addTo(state.publicSafetyCameraLayer);
+      state.renderedPublicSafetyMarkers.set(cam.id, marker);
+    }
+  }
+
+  function renderPoliceStations() {
+    if (!state.mapReady || !state.map || !state.policeStationLayer || !state.policeStations.length) return;
+    if (!state.cameraFilters.police) {
+      state.policeStationLayer.clearLayers();
+      state.renderedPoliceMarkers.clear();
+      return;
+    }
+
+    const bounds = getExpandedBounds();
+    const visible = state.policeStations.filter((station) => bounds.contains([station.lat, station.lng]));
+    const visibleIds = new Set(visible.map((station) => station.id));
+
+    for (const [id, marker] of state.renderedPoliceMarkers.entries()) {
+      if (!visibleIds.has(id)) {
+        state.policeStationLayer.removeLayer(marker);
+        state.renderedPoliceMarkers.delete(id);
+      }
+    }
+
+    for (const station of visible) {
+      if (state.renderedPoliceMarkers.has(station.id)) continue;
+      const marker = L.marker([station.lat, station.lng], {
+        icon: L.divIcon({
+          className: "police-station-marker",
+          html: "🐷",
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
+          popupAnchor: [0, -12]
+        })
+      });
+      marker.bindPopup(createPoliceStationPopup(station));
+      marker.addTo(state.policeStationLayer);
+      state.renderedPoliceMarkers.set(station.id, marker);
+    }
+  }
+
+  function safetyCameraFilterEnabled(cam) {
+    return isSpeedCamera(cam) ? state.cameraFilters.speed : state.cameraFilters.redLight;
+  }
+
   function getExpandedBounds() {
     const bounds = state.map.getBounds();
     const mode = state.renderRange;
@@ -496,6 +794,31 @@
     };
   }
 
+  function safetyCameraMarkerStyle(cam, route = false) {
+    const isSpeed = isSpeedCamera(cam);
+    return {
+      className: route ? "route-safety-camera-marker" : "safety-camera-marker",
+      radius: route ? 11 : 8,
+      color: "#ffffff",
+      weight: route ? 3 : 2,
+      opacity: 0.98,
+      fillColor: isSpeed ? "#ffce2e" : "#d90020",
+      fillOpacity: route ? 0.88 : 0.72
+    };
+  }
+
+  function publicSafetyCameraMarkerStyle() {
+    return {
+      className: "public-safety-camera-marker",
+      radius: 7,
+      color: "#ffffff",
+      weight: 2,
+      opacity: 0.94,
+      fillColor: "#ff8a2a",
+      fillOpacity: 0.68
+    };
+  }
+
   function createCameraPopup(cam) {
     const distance = state.lastPosition ? formatDistance(distanceFeet(state.lastPosition.lat, state.lastPosition.lng, cam.lat, cam.lng)) : "GPS waiting";
     const osmType = cam.osmType || "node";
@@ -516,6 +839,55 @@
         </div>
         <a target="_blank" rel="noopener" href="${osmUrl}">View OSM</a>
       </div>`;
+  }
+
+  function createSafetyCameraPopup(cam) {
+    const title = getSafetyCameraLabel(cam);
+    return `
+      <div class="popup-card safety-popup">
+        <h3>${escapeHtml(title)}</h3>
+        <div class="popup-grid">
+          <span>Location</span><span>${escapeHtml(cam.location || cam.name)}</span>
+          <span>Direction</span><span>${escapeHtml(cam.direction || "--")}</span>
+          <span>District</span><span>${escapeHtml(cam.district || "--")}</span>
+          <span>Source</span><span>${escapeHtml(cam.source)}</span>
+        </div>
+      </div>`;
+  }
+
+  function createPublicSafetyCameraPopup(cam) {
+    return `
+      <div class="popup-card public-safety-popup">
+        <h3>Public Safety Camera</h3>
+        <div class="popup-grid">
+          <span>Name</span><span>${escapeHtml(cam.name)}</span>
+          <span>Number</span><span>${escapeHtml(cam.number || "--")}</span>
+          <span>Access</span><span>SJPD controlled</span>
+          <span>Source</span><span>${escapeHtml(cam.source)}</span>
+        </div>
+      </div>`;
+  }
+
+  function createPoliceStationPopup(station) {
+    const coords = `${station.lat.toFixed(6)}, ${station.lng.toFixed(6)}`;
+    return `
+      <div class="popup-card police-popup">
+        <h3>${escapeHtml(station.name)}</h3>
+        <div class="popup-grid">
+          <span>Address</span><span>${escapeHtml(station.address || "--")}</span>
+          <span>Notice</span><span>Can have heavy police traffic nearby.</span>
+          <span>Source</span><span>${escapeHtml(station.source || "Local list")}</span>
+          <span>Coords</span><span>${coords}</span>
+        </div>
+      </div>`;
+  }
+
+  function getSafetyCameraLabel(cam) {
+    return isSpeedCamera(cam) ? "Speed Camera" : "Red Light Camera";
+  }
+
+  function isSpeedCamera(cam) {
+    return (cam.type || "").toLowerCase().includes("speed");
   }
 
   function setFollowMode(enabled, label = "on") {
@@ -796,6 +1168,46 @@
       state.map?.invalidateSize();
       renderVisibleCameras();
     }, 360);
+  }
+
+  function openFilterModal() {
+    syncFilterButtons();
+    els.filterModal.hidden = false;
+  }
+
+  function closeFilterModal() {
+    els.filterModal.hidden = true;
+  }
+
+  function toggleCameraFilter(key) {
+    if (!(key in state.cameraFilters)) return;
+    state.cameraFilters[key] = !state.cameraFilters[key];
+    syncFilterButtons();
+    refreshCameraFilterLayers();
+  }
+
+  function syncFilterButtons() {
+    $$("[data-camera-filter]").forEach((btn) => {
+      const enabled = !!state.cameraFilters[btn.dataset.cameraFilter];
+      btn.classList.toggle("active", enabled);
+      btn.setAttribute("aria-pressed", enabled ? "true" : "false");
+    });
+  }
+
+  function refreshCameraFilterLayers() {
+    state.renderedMarkers.clear();
+    state.renderedSafetyMarkers.clear();
+    state.renderedPublicSafetyMarkers.clear();
+    state.renderedPoliceMarkers.clear();
+    state.cameraLayer?.clearLayers();
+    state.safetyCameraLayer?.clearLayers();
+    state.publicSafetyCameraLayer?.clearLayers();
+    state.policeStationLayer?.clearLayers();
+    renderVisibleCameras();
+    renderSafetyCameras();
+    renderPublicSafetyCameras();
+    renderPoliceStations();
+    if (state.activeRoute?.route) drawRoute(state.activeRoute.origin, state.activeRoute.destination, state.activeRoute.route);
   }
 
   async function clearAppCache() {
@@ -1284,11 +1696,13 @@
   }
 
   function drawRoute(origin, destination, route) {
-    if (!state.map || !state.routeLayer || !state.routeCameraLayer) return;
+    if (!state.map || !state.routeLayer || !state.routeCameraLayer || !state.routeSafetyCameraLayer) return;
 
     state.routeLayer.clearLayers();
     state.routeCameraLayer.clearLayers();
+    state.routeSafetyCameraLayer.clearLayers();
     state.routeCameraIds.clear();
+    state.routeSafetyCameraIds.clear();
     state.cameraAlertHistory.clear();
     state.spokenStepIds.clear();
     state.lastStreetName = "";
@@ -1299,6 +1713,7 @@
     state.routeLatLngs = routeLatLngs;
     state.routePointDistances = buildRoutePointDistances(routeLatLngs);
     state.routeSteps = normalizeRouteSteps(route, routeLatLngs);
+    state.lastRouteProgressIndex = 0;
     const routeLine = L.polyline(routeLatLngs, {
       className: "route-line",
       color: "#ffb239",
@@ -1330,7 +1745,7 @@
     state.destinationMarker.bindPopup(`<b>Destination</b><br>${escapeHtml(destination.label.split(",").slice(0, 3).join(",").trim())}`);
     state.destinationMarker.addTo(state.routeLayer);
 
-    const nearby = getCamerasNearRoute(routeLatLngs, 700).slice(0, 260);
+    const nearby = state.cameraFilters.alpr ? getCamerasNearRoute(routeLatLngs, 700).slice(0, 260) : [];
     for (const item of nearby) {
       state.routeCameraIds.add(item.cam.id);
       L.circleMarker([item.cam.lat, item.cam.lng], {
@@ -1344,13 +1759,22 @@
       }).bindPopup(createCameraPopup(item.cam)).addTo(state.routeCameraLayer);
     }
 
-    state.activeRoute = { origin, destination, distance: route.distance, duration: route.duration };
+    const nearbySafety = getSafetyCamerasNearRoute(routeLatLngs, 800).filter((item) => safetyCameraFilterEnabled(item.cam)).slice(0, 160);
+    for (const item of nearbySafety) {
+      state.routeSafetyCameraIds.add(item.cam.id);
+      L.circleMarker([item.cam.lat, item.cam.lng], safetyCameraMarkerStyle(item.cam, true))
+        .bindPopup(createSafetyCameraPopup(item.cam))
+        .addTo(state.routeSafetyCameraLayer);
+    }
+
+    state.activeRoute = { origin, destination, route, distance: route.distance, duration: route.duration };
     updatePinDestinationButton();
     const miles = route.distance / 1609.344;
     const minutes = Math.round(route.duration / 60);
     const label = destination.label.split(",").slice(0, 2).join(",").trim();
+    const flockCount = nearby.filter((item) => (item.cam.brand || "").toLowerCase().includes("flock")).length;
     els.runtimeLabel.textContent = `route ready: ${miles.toFixed(miles < 10 ? 1 : 0)} mi`;
-    setRouteChip(`route: ${miles.toFixed(miles < 10 ? 1 : 0)} mi / ${minutes} min / ${nearby.length} cams`);
+    setRouteChip(`route: ${miles.toFixed(miles < 10 ? 1 : 0)} mi / ${minutes} min / ${flockCount} flock cams`);
     if (els.stopNavigationBtn) els.stopNavigationBtn.hidden = false;
     state.routeStartedAt = Date.now();
     state.lastEtaAnnounceAt = state.routeStartedAt;
@@ -1373,7 +1797,9 @@
     state.routeLatLngs = [];
     state.routePointDistances = [];
     state.routeSteps = [];
+    state.lastRouteProgressIndex = 0;
     state.routeCameraIds.clear();
+    state.routeSafetyCameraIds.clear();
     state.cameraAlertHistory.clear();
     state.spokenStepIds.clear();
     state.lastStreetName = "";
@@ -1383,6 +1809,7 @@
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     state.routeLayer?.clearLayers();
     state.routeCameraLayer?.clearLayers();
+    state.routeSafetyCameraLayer?.clearLayers();
     if (els.stopNavigationBtn) els.stopNavigationBtn.hidden = true;
     if (els.routeChip) {
       els.routeChip.textContent = "route: idle";
@@ -1798,6 +2225,7 @@
     if (!state.activeRoute || !state.routeLatLngs.length || !state.lastPosition) return;
 
     const progress = getRouteProgress(state.lastPosition.lat, state.lastPosition.lng);
+    state.lastRouteProgressIndex = progress.index;
     const remainingRatio = Math.max(0, 1 - (progress.distanceFeet / Math.max(state.activeRoute.distance * 3.28084, 1)));
     const remainingSeconds = Math.max(0, state.activeRoute.duration * remainingRatio);
     updateEtaChip(remainingSeconds);
@@ -1814,6 +2242,90 @@
       index,
       distanceFeet: state.routePointDistances[index] || 0
     };
+  }
+
+  function getRouteRelativeInfo(lat, lng) {
+    if (!state.activeRoute || !state.routeLatLngs.length || !state.lastPosition) return null;
+    const pointInfo = getClosestRoutePointInfo(lat, lng);
+    if (!pointInfo) return null;
+    const progress = getRouteProgress(state.lastPosition.lat, state.lastPosition.lng);
+    return {
+      aheadFeet: pointInfo.distanceFeet - progress.distanceFeet,
+      lateralFeet: pointInfo.lateralFeet,
+      routeIndex: pointInfo.index
+    };
+  }
+
+  function getClosestRoutePointInfo(lat, lng) {
+    if (!state.routeLatLngs.length) return null;
+    let best = null;
+    for (let i = 1; i < state.routeLatLngs.length; i += 1) {
+      const a = state.routeLatLngs[i - 1];
+      const b = state.routeLatLngs[i];
+      const projection = projectPointToSegment(lat, lng, a, b);
+      if (!best || projection.lateralFeet < best.lateralFeet) {
+        const segmentFeet = distanceFeet(a[0], a[1], b[0], b[1]);
+        best = {
+          index: i,
+          lateralFeet: projection.lateralFeet,
+          distanceFeet: (state.routePointDistances[i - 1] || 0) + (segmentFeet * projection.t)
+        };
+      }
+    }
+    return best;
+  }
+
+  function projectPointToSegment(lat, lng, a, b) {
+    const metersPerDegreeLat = 111320;
+    const metersPerDegreeLng = 111320 * Math.cos((lat * Math.PI) / 180);
+    const ax = (a[1] - lng) * metersPerDegreeLng;
+    const ay = (a[0] - lat) * metersPerDegreeLat;
+    const bx = (b[1] - lng) * metersPerDegreeLng;
+    const by = (b[0] - lat) * metersPerDegreeLat;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lengthSq = dx * dx + dy * dy;
+    if (!lengthSq) return { lateralFeet: Math.sqrt(ax * ax + ay * ay) * 3.28084, t: 0 };
+    const t = Math.max(0, Math.min(1, (-(ax * dx + ay * dy)) / lengthSq));
+    const x = ax + (dx * t);
+    const y = ay + (dy * t);
+    return { lateralFeet: Math.sqrt(x * x + y * y) * 3.28084, t };
+  }
+
+  function describeRelativeSide(lat, lng) {
+    if (!state.lastPosition) return "nearby";
+    const heading = getUserHeading();
+    if (!Number.isFinite(heading)) return "nearby";
+    const targetBearing = bearingDegrees(state.lastPosition.lat, state.lastPosition.lng, lat, lng);
+    const diff = angleDifference(targetBearing, heading);
+    const abs = Math.abs(diff);
+    if (abs <= 30) return "straight ahead";
+    if (abs >= 150) return diff >= 0 ? "to the right" : "to the left";
+    return diff > 0 ? "to the right" : "to the left";
+  }
+
+  function getUserHeading() {
+    if (Number.isFinite(state.lastPosition?.heading)) return state.lastPosition.heading;
+    if (!state.routeLatLngs.length) return null;
+    const index = Math.min(Math.max(state.lastRouteProgressIndex || 0, 0), state.routeLatLngs.length - 2);
+    const a = state.routeLatLngs[index];
+    const b = state.routeLatLngs[index + 1];
+    return bearingDegrees(a[0], a[1], b[0], b[1]);
+  }
+
+  function bearingDegrees(lat1, lng1, lat2, lng2) {
+    const toRad = (deg) => deg * Math.PI / 180;
+    const toDeg = (rad) => rad * 180 / Math.PI;
+    const phi1 = toRad(lat1);
+    const phi2 = toRad(lat2);
+    const dLng = toRad(lng2 - lng1);
+    const y = Math.sin(dLng) * Math.cos(phi2);
+    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  function angleDifference(target, origin) {
+    return ((target - origin + 540) % 360) - 180;
   }
 
   function updateEtaChip(remainingSeconds) {
@@ -1867,40 +2379,116 @@
 
   function maybeAnnounceCameraAlert() {
     const now = Date.now();
-    if (now - state.lastCameraAlertAt < 12000) return;
-    const camera = getNearestAlertCamera();
-    if (!camera) return;
+    if (state.speechSpeaking || state.speechQueue.length || now - state.lastCameraAlertAt < 4500) return;
+    const alert = getNearestRouteAwareAlert();
+    if (!alert) return;
 
-    const thresholds = [50, 100, 1320, 2640, 5280];
-    for (const threshold of thresholds) {
-      if (camera.feet > threshold) continue;
-      const key = `${camera.cam.id}:${threshold}`;
+    for (const band of ALERT_BANDS) {
+      if (alert.feet > band.feet) continue;
+      const key = `${alert.id}:${band.id}`;
       if (state.cameraAlertHistory.has(key)) continue;
       state.cameraAlertHistory.add(key);
       state.lastCameraAlertAt = now;
-      enqueueSpeech(`Flock camera ${formatDistanceSpeech(camera.feet)} ahead.`, "camera");
+      enqueueSpeech(buildAlertSpeech(alert, band), "camera");
       return;
     }
   }
 
+  function getNearestRouteAwareAlert() {
+    const candidates = [
+      getNearestSafetyAlertCamera(),
+      getNearestPublicSafetyAlertCamera(),
+      getNearestPoliceStationAlert(),
+      getNearestAlertCamera()
+    ].filter(Boolean);
+    if (!candidates.length) return null;
+    return candidates.sort((a, b) => a.feet - b.feet)[0];
+  }
+
+  function buildAlertSpeech(alert, band) {
+    if (alert.kind === "police") {
+      return `Police department ${band.label} ${alert.side}.`;
+    }
+    return `${alert.label} ${band.label} ahead.`;
+  }
+
   function getNearestAlertCamera() {
-    if (!state.lastPosition || !state.cameras.length) return null;
+    if (!state.cameraFilters.alpr || !state.lastPosition || !state.cameras.length) return null;
     let best = null;
     let bestFeet = Infinity;
-    const routeOnly = state.routeCameraIds.size > 0;
 
     for (const cam of state.cameras) {
-      if (routeOnly && !state.routeCameraIds.has(cam.id)) continue;
       if (!(cam.brand || "").toLowerCase().includes("flock")) continue;
-      const feet = distanceFeet(state.lastPosition.lat, state.lastPosition.lng, cam.lat, cam.lng);
-      if (feet < bestFeet) {
+      const routeInfo = getRouteRelativeInfo(cam.lat, cam.lng);
+      if (!routeInfo || routeInfo.lateralFeet > 260 || routeInfo.aheadFeet < 0 || routeInfo.aheadFeet > 5280) continue;
+      if (routeInfo.aheadFeet < bestFeet) {
         best = cam;
-        bestFeet = feet;
+        bestFeet = routeInfo.aheadFeet;
       }
     }
 
     if (!best || bestFeet > 5280) return null;
-    return { cam: best, feet: bestFeet };
+    return { id: `flock:${best.id}`, cam: best, feet: bestFeet, label: "Flock camera", kind: "flock" };
+  }
+
+  function getNearestSafetyAlertCamera() {
+    if (!state.lastPosition || !state.safetyCameras.length) return null;
+    let best = null;
+    let bestFeet = Infinity;
+
+    for (const cam of state.safetyCameras) {
+      if (!safetyCameraFilterEnabled(cam)) continue;
+      const routeInfo = getRouteRelativeInfo(cam.lat, cam.lng);
+      if (!routeInfo || routeInfo.lateralFeet > ROUTE_ALERT_LATERAL_FEET || routeInfo.aheadFeet < 0 || routeInfo.aheadFeet > ALERT_BANDS[2].feet) continue;
+      if (routeInfo.aheadFeet < bestFeet) {
+        best = cam;
+        bestFeet = routeInfo.aheadFeet;
+      }
+    }
+
+    if (!best) return null;
+    return { id: `safety:${best.id}`, cam: best, feet: bestFeet, label: getSafetyCameraLabel(best), kind: isSpeedCamera(best) ? "speed" : "red-light" };
+  }
+
+  function getNearestPublicSafetyAlertCamera() {
+    if (!state.cameraFilters.publicSafety || !state.lastPosition || !state.publicSafetyCameras.length) return null;
+    let best = null;
+    let bestFeet = Infinity;
+
+    for (const cam of state.publicSafetyCameras) {
+      const routeInfo = getRouteRelativeInfo(cam.lat, cam.lng);
+      if (!routeInfo || routeInfo.lateralFeet > ROUTE_ALERT_LATERAL_FEET || routeInfo.aheadFeet < 0 || routeInfo.aheadFeet > ALERT_BANDS[2].feet) continue;
+      if (routeInfo.aheadFeet < bestFeet) {
+        best = cam;
+        bestFeet = routeInfo.aheadFeet;
+      }
+    }
+
+    if (!best) return null;
+    return { id: `public-safety:${best.id}`, cam: best, feet: bestFeet, label: "Public safety camera", kind: "public-safety" };
+  }
+
+  function getNearestPoliceStationAlert() {
+    if (!state.cameraFilters.police || !state.lastPosition || !state.policeStations.length) return null;
+    let best = null;
+    let bestFeet = Infinity;
+
+    for (const station of state.policeStations) {
+      const feet = distanceFeet(state.lastPosition.lat, state.lastPosition.lng, station.lat, station.lng);
+      if (feet > POLICE_ALERT_RADIUS_FEET || feet >= bestFeet) continue;
+      best = station;
+      bestFeet = feet;
+    }
+
+    if (!best) return null;
+    return {
+      id: `police:${best.id}`,
+      cam: best,
+      feet: bestFeet,
+      label: "Police department",
+      kind: "police",
+      side: describeRelativeSide(best.lat, best.lng)
+    };
   }
 
   function getNextStep(routeIndex) {
@@ -2035,6 +2623,20 @@
     const candidates = [];
 
     for (const cam of state.cameras) {
+      if (!routeBounds.contains([cam.lat, cam.lng])) continue;
+      const feet = distanceToRouteFeet(cam.lat, cam.lng, routeLatLngs);
+      if (feet <= thresholdFeet) candidates.push({ cam, feet });
+    }
+
+    return candidates.sort((a, b) => a.feet - b.feet);
+  }
+
+  function getSafetyCamerasNearRoute(routeLatLngs, thresholdFeet) {
+    if (!routeLatLngs.length || !state.safetyCameras.length) return [];
+    const routeBounds = L.latLngBounds(routeLatLngs).pad(0.08);
+    const candidates = [];
+
+    for (const cam of state.safetyCameras) {
       if (!routeBounds.contains([cam.lat, cam.lng])) continue;
       const feet = distanceToRouteFeet(cam.lat, cam.lng, routeLatLngs);
       if (feet <= thresholdFeet) candidates.push({ cam, feet });
