@@ -1141,6 +1141,10 @@ p { color: var(--muted); line-height: 1.55; }
   border-color: rgba(66,244,255,.38);
   background: rgba(0, 169, 255, .22);
 }
+.map-fullscreen .filter-btn {
+  top: calc(76px + env(safe-area-inset-top));
+  right: calc(14px + env(safe-area-inset-right));
+}
 .map-fullscreen #recenterBtn {
   right: calc(14px + env(safe-area-inset-right));
   bottom: calc(18px + env(safe-area-inset-bottom));
@@ -1153,6 +1157,9 @@ p { color: var(--muted); line-height: 1.55; }
   bottom: calc(18px + env(safe-area-inset-bottom));
 }
 .map-fullscreen .pin-modal {
+  z-index: 10000;
+}
+.map-fullscreen .filter-modal {
   z-index: 10000;
 }
 
