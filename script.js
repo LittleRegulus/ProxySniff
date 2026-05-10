@@ -1,7 +1,8 @@
 (() => {
   "use strict";
 
-  const APP_VERSION = "1.6.0";
+  const APP_VERSION = "1.9.0";
+  const PINS_STORAGE_KEY = "proxysniff_pinned_spots";
 
   const CAMERA_PACKS = {
     bay: {
@@ -25,7 +26,11 @@
     renderedMarkers: new Map(),
     map: null,
     cameraLayer: null,
+    routeLayer: null,
+    routeCameraLayer: null,
+    pinLayer: null,
     userMarker: null,
+    destinationMarker: null,
     accuracyCircle: null,
     watchId: null,
     followUser: false,
@@ -50,6 +55,23 @@
     wifiTotal: 0,
     mapReady: false,
     mapFullscreen: false,
+    activeRoute: null,
+    routeLatLngs: [],
+    routePointDistances: [],
+    routeSteps: [],
+    routeStartedAt: 0,
+    routeEtaAnnounceInterval: 0,
+    lastEtaAnnounceAt: 0,
+    lastStreetName: "",
+    lastStreetAnnounceAt: 0,
+    spokenStepIds: new Set(),
+    routeCameraIds: new Set(),
+    cameraAlertHistory: new Set(),
+    lastCameraAlertAt: 0,
+    speechQueue: [],
+    speechSpeaking: false,
+    pins: [],
+    activePinDraft: null,
     safeMode: localStorage.getItem("proxysniff_safe_mode") !== "off",
     opsLines: [],
     opsProgressTimer: null
@@ -79,6 +101,8 @@
     burstBtn: $("#burstBtn"),
     locateBtn: $("#locateBtn"),
     recenterBtn: $("#recenterBtn"),
+    pinSpotBtn: $("#pinSpotBtn"),
+    stopNavigationBtn: $("#stopNavigationBtn"),
     fullscreenMapBtn: $("#fullscreenMapBtn"),
     demoDriveBtn: $("#demoDriveBtn"),
     fitCamsBtn: $("#fitCamsBtn"),
@@ -87,8 +111,24 @@
     flockChip: $("#flockChip"),
     visibleChip: $("#visibleChip"),
     followChip: $("#followChip"),
+    maneuverChip: $("#maneuverChip"),
+    etaChip: $("#etaChip"),
+    routeChip: $("#routeChip"),
+    pinnedList: $("#pinnedList"),
+    newPinBtn: $("#newPinBtn"),
+    pinModal: $("#pinModal"),
+    pinForm: $("#pinForm"),
+    closePinModalBtn: $("#closePinModalBtn"),
+    cancelPinBtn: $("#cancelPinBtn"),
+    pinNameInput: $("#pinNameInput"),
+    pinDescriptionInput: $("#pinDescriptionInput"),
+    pinPhotoInput: $("#pinPhotoInput"),
+    pinPreview: $("#pinPreview"),
+    pinMeta: $("#pinMeta"),
     addressForm: $("#addressForm"),
     addressInput: $("#addressInput"),
+    destinationForm: $("#destinationForm"),
+    destinationInput: $("#destinationInput"),
     packSelect: $("#packSelect"),
     renderRangeSelect: $("#renderRangeSelect"),
     fakeFeedToggle: $("#fakeFeedToggle"),
@@ -105,10 +145,12 @@
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
+    loadPins();
     wireEvents();
     setSafeMode(state.safeMode, false);
     seedWifi();
     renderWifiList();
+    renderPinnedSpots();
     startScanner();
     await loadCameraPack(state.activePack);
     setTimeout(() => {
@@ -118,7 +160,7 @@
     }, 900);
 
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
-      navigator.serviceWorker.register("./service-worker.js?v=1.6.0").catch(() => {});
+      navigator.serviceWorker.register("./service-worker.js?v=1.9.0").catch(() => {});
     }
   }
 
@@ -132,10 +174,21 @@
     els.burstBtn.addEventListener("click", () => burstSignals(8));
     els.locateBtn.addEventListener("click", toggleFollowTracking);
     els.recenterBtn.addEventListener("click", recenterOnUser);
+    els.pinSpotBtn.addEventListener("click", openPinModalAtMapCenter);
+    els.stopNavigationBtn.addEventListener("click", stopNavigation);
     els.fullscreenMapBtn.addEventListener("click", toggleMapFullscreen);
     els.fitCamsBtn.addEventListener("click", fitCameraBounds);
     els.demoDriveBtn.addEventListener("click", toggleDemoDrive);
     els.addressForm.addEventListener("submit", searchAddress);
+    els.destinationForm.addEventListener("submit", routeToDestination);
+    els.newPinBtn?.addEventListener("click", () => {
+      navigate("map");
+      setTimeout(openPinModalAtMapCenter, 220);
+    });
+    els.closePinModalBtn?.addEventListener("click", closePinModal);
+    els.cancelPinBtn?.addEventListener("click", closePinModal);
+    els.pinForm?.addEventListener("submit", savePinFromForm);
+    els.pinPhotoInput?.addEventListener("change", handlePinPhotoChange);
     els.packSelect.value = state.activePack;
     els.renderRangeSelect.value = state.renderRange;
     els.packSelect.addEventListener("change", async (event) => {
@@ -181,12 +234,16 @@
       setTimeout(() => {
         state.map?.invalidateSize();
         renderVisibleCameras();
+        renderPinMarkers();
       }, 150);
       setTimeout(() => {
         state.map?.invalidateSize();
         renderVisibleCameras();
+        renderPinMarkers();
       }, 650);
     }
+
+    if (view === "pinned") renderPinnedSpots();
   }
 
   async function loadCameraPack(packKey, forceReload = false) {
@@ -335,11 +392,15 @@
 
     L.control.zoom({ position: "bottomright" }).addTo(state.map);
     state.cameraLayer = L.layerGroup().addTo(state.map);
+    state.routeLayer = L.layerGroup().addTo(state.map);
+    state.routeCameraLayer = L.layerGroup().addTo(state.map);
+    state.pinLayer = L.layerGroup().addTo(state.map);
     state.map.on("moveend zoomend", renderVisibleCameras);
     state.map.on("dragstart", () => {
       if (state.followUser) setFollowMode(false);
     });
     renderVisibleCameras();
+    renderPinMarkers();
   }
 
   function renderVisibleCameras() {
@@ -364,7 +425,10 @@
     }
 
     for (const cam of visible) {
-      if (state.renderedMarkers.has(cam.id)) continue;
+      if (state.renderedMarkers.has(cam.id)) {
+        state.renderedMarkers.get(cam.id).setStyle(cameraMarkerStyle(cam, zoom));
+        continue;
+      }
       const marker = L.circleMarker([cam.lat, cam.lng], cameraMarkerStyle(cam, zoom));
       marker.bindPopup(createCameraPopup(cam));
       marker.on("click", () => {
@@ -397,15 +461,16 @@
   function cameraMarkerStyle(cam, zoom) {
     const isFlock = (cam.brand || "").toLowerCase().includes("flock");
     const isMotorola = (cam.brand || "").toLowerCase().includes("motorola");
+    const isRouteCamera = state.routeCameraIds.has(cam.id);
     const radius = zoom < 9 ? 4 : zoom < 12 ? 6 : 8;
     return {
       className: "camera-marker",
       radius,
-      color: isFlock ? "#18a8ff" : isMotorola ? "#8f7bff" : "#70c7ff",
-      weight: 2,
+      color: isRouteCamera ? "#ffb239" : isFlock ? "#18a8ff" : isMotorola ? "#8f7bff" : "#70c7ff",
+      weight: isRouteCamera ? 3 : 2,
       opacity: 0.95,
-      fillColor: isFlock ? "#0aa2ff" : isMotorola ? "#8f7bff" : "#80d8ff",
-      fillOpacity: isFlock ? 0.42 : 0.3
+      fillColor: isRouteCamera ? "#ffb239" : isFlock ? "#0aa2ff" : isMotorola ? "#8f7bff" : "#80d8ff",
+      fillOpacity: isRouteCamera ? 0.52 : isFlock ? 0.42 : 0.3
     };
   }
 
@@ -496,6 +561,7 @@
     updateCurrentAreaLabel(latitude, longitude);
     updateUserMarker();
     updateNearestCamera();
+    updateRouteGuidance();
     if (state.pendingRecenter && state.map) {
       state.pendingRecenter = false;
       state.map.setView([latitude, longitude], Math.max(15, state.map.getZoom()), { animate: true });
@@ -772,6 +838,666 @@
     }
   }
 
+  async function routeToDestination(event) {
+    event.preventDefault();
+    const query = els.destinationInput.value.trim();
+    if (!query) return;
+
+    try {
+      const destination = await geocodePlace(query);
+      if (!destination) {
+        initMapOnce();
+        els.runtimeLabel.textContent = "destination not found";
+        setRouteChip("route: destination not found");
+        return;
+      }
+      await routeToPoint(destination);
+    } catch (error) {
+      console.warn(error);
+      els.runtimeLabel.textContent = "route failed";
+      setRouteChip("route: mapping failed");
+    }
+  }
+
+  async function routeToPoint(destination) {
+    initMapOnce();
+    ensureLocationWatch();
+    els.runtimeLabel.textContent = "routing destination";
+    setRouteChip("route: finding destination");
+
+    const origin = getRouteOrigin();
+    setRouteChip("route: mapping drive");
+    const route = await fetchDrivingRoute(origin, destination);
+    drawRoute(origin, destination, route);
+  }
+
+  async function geocodePlace(query) {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+    const response = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (!response.ok) throw new Error(`Geocode HTTP ${response.status}`);
+    const results = await response.json();
+    if (!results.length) return null;
+    const result = results[0];
+    return {
+      lat: Number(result.lat),
+      lng: Number(result.lon),
+      label: result.display_name || query
+    };
+  }
+
+  function getRouteOrigin() {
+    if (state.lastPosition) {
+      return {
+        lat: state.lastPosition.lat,
+        lng: state.lastPosition.lng,
+        label: "Current location"
+      };
+    }
+
+    const center = state.map?.getCenter();
+    return {
+      lat: center?.lat ?? DEFAULT_CENTER[0],
+      lng: center?.lng ?? DEFAULT_CENTER[1],
+      label: "Map center"
+    };
+  }
+
+  async function fetchDrivingRoute(origin, destination) {
+    const coords = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
+    const response = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (!response.ok) throw new Error(`Route HTTP ${response.status}`);
+    const payload = await response.json();
+    const route = payload?.routes?.[0];
+    if (!route?.geometry?.coordinates?.length) throw new Error("No route geometry returned");
+    return route;
+  }
+
+  function drawRoute(origin, destination, route) {
+    if (!state.map || !state.routeLayer || !state.routeCameraLayer) return;
+
+    state.routeLayer.clearLayers();
+    state.routeCameraLayer.clearLayers();
+    state.routeCameraIds.clear();
+    state.cameraAlertHistory.clear();
+    state.spokenStepIds.clear();
+    state.lastStreetName = "";
+    state.lastStreetAnnounceAt = 0;
+    state.lastCameraAlertAt = 0;
+
+    const routeLatLngs = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+    state.routeLatLngs = routeLatLngs;
+    state.routePointDistances = buildRoutePointDistances(routeLatLngs);
+    state.routeSteps = normalizeRouteSteps(route, routeLatLngs);
+    const routeLine = L.polyline(routeLatLngs, {
+      className: "route-line",
+      color: "#ffb239",
+      weight: 6,
+      opacity: 0.92,
+      lineCap: "round",
+      lineJoin: "round"
+    }).addTo(state.routeLayer);
+
+    L.polyline(routeLatLngs, {
+      color: "#2effc8",
+      weight: 2,
+      opacity: 0.88,
+      dashArray: "8 12"
+    }).addTo(state.routeLayer);
+
+    if (state.destinationMarker) {
+      state.destinationMarker.setLatLng([destination.lat, destination.lng]);
+    } else {
+      state.destinationMarker = L.circleMarker([destination.lat, destination.lng], {
+        className: "destination-marker",
+        radius: 10,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#ffb239",
+        fillOpacity: 0.9
+      });
+    }
+    state.destinationMarker.bindPopup(`<b>Destination</b><br>${escapeHtml(destination.label.split(",").slice(0, 3).join(",").trim())}`);
+    state.destinationMarker.addTo(state.routeLayer);
+
+    const nearby = getCamerasNearRoute(routeLatLngs, 700).slice(0, 260);
+    for (const item of nearby) {
+      state.routeCameraIds.add(item.cam.id);
+      L.circleMarker([item.cam.lat, item.cam.lng], {
+        className: "route-camera-marker",
+        radius: 10,
+        color: "#ffb239",
+        weight: 3,
+        opacity: 0.95,
+        fillColor: "#ffb239",
+        fillOpacity: 0.18
+      }).bindPopup(createCameraPopup(item.cam)).addTo(state.routeCameraLayer);
+    }
+
+    state.activeRoute = { origin, destination, distance: route.distance, duration: route.duration };
+    const miles = route.distance / 1609.344;
+    const minutes = Math.round(route.duration / 60);
+    const label = destination.label.split(",").slice(0, 2).join(",").trim();
+    els.runtimeLabel.textContent = `route ready: ${miles.toFixed(miles < 10 ? 1 : 0)} mi`;
+    setRouteChip(`route: ${miles.toFixed(miles < 10 ? 1 : 0)} mi / ${minutes} min / ${nearby.length} cams`);
+    if (els.stopNavigationBtn) els.stopNavigationBtn.hidden = false;
+    state.routeStartedAt = Date.now();
+    state.lastEtaAnnounceAt = state.routeStartedAt;
+    state.routeEtaAnnounceInterval = Math.max(60000, (route.duration * 1000) / 4);
+    updateEtaChip(route.duration);
+    updateManeuverChip();
+    enqueueSpeech(`Route ready. Estimated arrival in ${formatDurationSpeech(route.duration)}.`, "eta");
+    state.viewAreaLabel = label || destination.label;
+    refreshAreaChip();
+    renderVisibleCameras();
+
+    const bounds = routeLine.getBounds();
+    if (state.lastPosition) bounds.extend([state.lastPosition.lat, state.lastPosition.lng]);
+    state.map.fitBounds(bounds, { padding: [36, 36], maxZoom: 16 });
+  }
+
+  function stopNavigation() {
+    state.activeRoute = null;
+    state.routeLatLngs = [];
+    state.routePointDistances = [];
+    state.routeSteps = [];
+    state.routeCameraIds.clear();
+    state.cameraAlertHistory.clear();
+    state.spokenStepIds.clear();
+    state.lastStreetName = "";
+    state.routeEtaAnnounceInterval = 0;
+    state.speechQueue = [];
+    state.speechSpeaking = false;
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    state.routeLayer?.clearLayers();
+    state.routeCameraLayer?.clearLayers();
+    if (els.stopNavigationBtn) els.stopNavigationBtn.hidden = true;
+    if (els.routeChip) {
+      els.routeChip.textContent = "route: idle";
+      els.routeChip.hidden = true;
+    }
+    if (els.maneuverChip) els.maneuverChip.textContent = "next turn: route inactive";
+    if (els.etaChip) els.etaChip.textContent = "ETA --";
+    els.runtimeLabel.textContent = "navigation stopped";
+    renderVisibleCameras();
+  }
+
+  function loadPins() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PINS_STORAGE_KEY) || "[]");
+      state.pins = Array.isArray(stored) ? stored.filter((pin) => Number.isFinite(pin.lat) && Number.isFinite(pin.lng)) : [];
+    } catch (error) {
+      console.warn("Pinned spots failed to load:", error);
+      state.pins = [];
+    }
+  }
+
+  function savePins() {
+    try {
+      localStorage.setItem(PINS_STORAGE_KEY, JSON.stringify(state.pins));
+    } catch (error) {
+      console.warn("Pinned spots failed to save:", error);
+      els.runtimeLabel.textContent = "pin storage full";
+    }
+  }
+
+  async function openPinModalAtMapCenter() {
+    initMapOnce();
+    if (!state.map) return;
+    const center = state.map.getCenter();
+    const draft = {
+      id: `pin-${Date.now()}-${randInt(1000, 9999)}`,
+      lat: center.lat,
+      lng: center.lng,
+      address: "Looking up address...",
+      photo: "",
+      createdAt: Date.now()
+    };
+    state.activePinDraft = draft;
+    els.pinForm.reset();
+    els.pinNameInput.value = "";
+    els.pinDescriptionInput.value = "";
+    els.pinPreview.innerHTML = "<span>No photo selected</span>";
+    els.pinMeta.textContent = `${center.lat.toFixed(6)}, ${center.lng.toFixed(6)} • Looking up address...`;
+    els.pinModal.hidden = false;
+    els.pinNameInput.focus();
+
+    try {
+      draft.address = await reverseGeocodePoint(center.lat, center.lng);
+      if (state.activePinDraft?.id === draft.id) {
+        state.activePinDraft.address = draft.address;
+        els.pinMeta.textContent = `${center.lat.toFixed(6)}, ${center.lng.toFixed(6)} • ${draft.address}`;
+      }
+    } catch (error) {
+      console.warn("Pin address lookup failed:", error);
+      draft.address = `Near ${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
+      if (state.activePinDraft?.id === draft.id) {
+        state.activePinDraft.address = draft.address;
+        els.pinMeta.textContent = `${center.lat.toFixed(6)}, ${center.lng.toFixed(6)} • ${draft.address}`;
+      }
+    }
+  }
+
+  function closePinModal() {
+    state.activePinDraft = null;
+    els.pinModal.hidden = true;
+  }
+
+  async function handlePinPhotoChange(event) {
+    const file = event.target.files?.[0];
+    if (!file || !state.activePinDraft) return;
+    try {
+      const dataUrl = await resizeImageFile(file, 420);
+      state.activePinDraft.photo = dataUrl;
+      els.pinPreview.innerHTML = `<img src="${dataUrl}" alt="Pinned spot preview" />`;
+    } catch (error) {
+      console.warn("Pin photo failed:", error);
+      els.pinPreview.innerHTML = "<span>Photo could not be loaded</span>";
+    }
+  }
+
+  function savePinFromForm(event) {
+    event.preventDefault();
+    const draft = state.activePinDraft;
+    if (!draft) return;
+
+    const pin = {
+      ...draft,
+      name: els.pinNameInput.value.trim() || "Pinned spot",
+      description: els.pinDescriptionInput.value.trim(),
+      updatedAt: Date.now()
+    };
+    state.pins.unshift(pin);
+    savePins();
+    closePinModal();
+    renderPinnedSpots();
+    renderPinMarkers();
+    els.runtimeLabel.textContent = "pin saved";
+  }
+
+  function renderPinnedSpots() {
+    if (!els.pinnedList) return;
+    if (!state.pins.length) {
+      els.pinnedList.innerHTML = `
+        <div class="empty-pins">
+          <strong>No pinned spots yet</strong>
+          <span>Open the heat map, move the map to a spot, then tap the pin button.</span>
+        </div>
+      `;
+      return;
+    }
+
+    els.pinnedList.innerHTML = state.pins.map((pin) => `
+      <article class="pin-card">
+        <div class="pin-thumb">${pin.photo ? `<img src="${pin.photo}" alt="" />` : "<span>PIN</span>"}</div>
+        <div class="pin-copy">
+          <strong>${escapeHtml(pin.name)}</strong>
+          <span>${escapeHtml(pin.address || "Address unavailable")}</span>
+          <small>${pin.lat.toFixed(6)}, ${pin.lng.toFixed(6)}</small>
+          ${pin.description ? `<p>${escapeHtml(pin.description)}</p>` : ""}
+        </div>
+        <div class="pin-actions">
+          <button class="primary-btn" type="button" data-pin-route="${escapeHtml(pin.id)}">Route</button>
+          <button class="ghost-btn" type="button" data-pin-view="${escapeHtml(pin.id)}">View</button>
+          <button class="ghost-btn danger-ghost" type="button" data-pin-delete="${escapeHtml(pin.id)}">Delete</button>
+        </div>
+      </article>
+    `).join("");
+
+    $$("[data-pin-route]").forEach((btn) => btn.addEventListener("click", () => routeToSavedPin(btn.dataset.pinRoute)));
+    $$("[data-pin-view]").forEach((btn) => btn.addEventListener("click", () => viewSavedPin(btn.dataset.pinView)));
+    $$("[data-pin-delete]").forEach((btn) => btn.addEventListener("click", () => deleteSavedPin(btn.dataset.pinDelete)));
+  }
+
+  function renderPinMarkers() {
+    if (!state.mapReady || !state.pinLayer) return;
+    state.pinLayer.clearLayers();
+    for (const pin of state.pins) {
+      const marker = L.circleMarker([pin.lat, pin.lng], {
+        className: "saved-pin-marker",
+        radius: 9,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#2effc8",
+        fillOpacity: 0.86
+      }).addTo(state.pinLayer);
+      marker.bindPopup(createPinPopup(pin));
+      marker.on("click", () => {
+        els.runtimeLabel.textContent = `pin: ${pin.name}`;
+      });
+    }
+  }
+
+  function createPinPopup(pin) {
+    return `
+      <div class="popup-card pin-popup">
+        ${pin.photo ? `<img src="${pin.photo}" alt="" />` : ""}
+        <h3>${escapeHtml(pin.name)}</h3>
+        <p>${escapeHtml(pin.description || pin.address || "Pinned spot")}</p>
+        <div class="popup-grid">
+          <span>Address</span><span>${escapeHtml(pin.address || "--")}</span>
+          <span>Coords</span><span>${pin.lat.toFixed(6)}, ${pin.lng.toFixed(6)}</span>
+        </div>
+      </div>`;
+  }
+
+  async function routeToSavedPin(id) {
+    const pin = state.pins.find((item) => item.id === id);
+    if (!pin) return;
+    navigate("map");
+    els.destinationInput.value = pin.name;
+    await routeToPoint({ lat: pin.lat, lng: pin.lng, label: pin.name || pin.address || "Pinned spot" });
+  }
+
+  function viewSavedPin(id) {
+    const pin = state.pins.find((item) => item.id === id);
+    if (!pin) return;
+    navigate("map");
+    initMapOnce();
+    setFollowMode(false);
+    state.map?.setView([pin.lat, pin.lng], 17, { animate: true });
+    setAreaChip(pin.address || pin.name);
+  }
+
+  function deleteSavedPin(id) {
+    state.pins = state.pins.filter((pin) => pin.id !== id);
+    savePins();
+    renderPinnedSpots();
+    renderPinMarkers();
+    els.runtimeLabel.textContent = "pin deleted";
+  }
+
+  async function reverseGeocodePoint(lat, lng) {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18&addressdetails=1`;
+    const response = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (!response.ok) throw new Error(`Reverse geocode HTTP ${response.status}`);
+    const result = await response.json();
+    return formatReverseAddress(result) || `Near ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+
+  function resizeImageFile(file, maxSize) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("File read failed"));
+      reader.onload = () => {
+        const image = new Image();
+        image.onerror = () => reject(new Error("Image decode failed"));
+        image.onload = () => {
+          const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.78));
+        };
+        image.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function setRouteChip(text) {
+    if (!els.routeChip) return;
+    els.routeChip.hidden = false;
+    els.routeChip.textContent = text;
+  }
+
+  function normalizeRouteSteps(route, routeLatLngs) {
+    const steps = (route.legs || []).flatMap((leg) => leg.steps || []);
+    return steps.map((step, index) => {
+      const location = step.maneuver?.location || [];
+      const latlng = [Number(location[1]), Number(location[0])];
+      return {
+        id: `${index}-${step.maneuver?.type || "step"}-${step.maneuver?.modifier || ""}`,
+        index,
+        name: step.name || "",
+        distance: step.distance || 0,
+        duration: step.duration || 0,
+        latlng,
+        routeIndex: findClosestRouteIndex(latlng[0], latlng[1], routeLatLngs),
+        instruction: buildManeuverInstruction(step)
+      };
+    }).filter((step) => Number.isFinite(step.latlng[0]) && Number.isFinite(step.latlng[1]));
+  }
+
+  function buildRoutePointDistances(routeLatLngs) {
+    const distances = [0];
+    for (let i = 1; i < routeLatLngs.length; i += 1) {
+      distances[i] = distances[i - 1] + distanceFeet(routeLatLngs[i - 1][0], routeLatLngs[i - 1][1], routeLatLngs[i][0], routeLatLngs[i][1]);
+    }
+    return distances;
+  }
+
+  function buildManeuverInstruction(step) {
+    const type = step.maneuver?.type || "continue";
+    const modifier = step.maneuver?.modifier || "";
+    const street = step.name ? ` onto ${step.name}` : "";
+    const direction = modifier.replace("uturn", "U-turn");
+
+    if (type === "depart") return step.name ? `Head ${direction || "out"} on ${step.name}` : "Start driving";
+    if (type === "arrive") return "Arrive at your destination";
+    if (type === "turn") return `Turn ${direction}${street}`;
+    if (type === "new name") return step.name ? `Continue onto ${step.name}` : "Continue ahead";
+    if (type === "merge") return `Merge ${direction}${street}`;
+    if (type === "on ramp") return `Take the ramp ${direction}${street}`;
+    if (type === "off ramp") return `Take the exit ${direction}${street}`;
+    if (type === "fork") return `Keep ${direction}${street}`;
+    if (type === "roundabout" || type === "rotary") return `Enter the roundabout${street}`;
+    if (type === "notification") return step.name ? `Continue on ${step.name}` : "Continue ahead";
+    return `${type.replace(/-/g, " ")} ${direction}${street}`.replace(/\s+/g, " ").trim();
+  }
+
+  function updateRouteGuidance() {
+    if (!state.activeRoute || !state.routeLatLngs.length || !state.lastPosition) return;
+
+    const progress = getRouteProgress(state.lastPosition.lat, state.lastPosition.lng);
+    const remainingRatio = Math.max(0, 1 - (progress.distanceFeet / Math.max(state.activeRoute.distance * 3.28084, 1)));
+    const remainingSeconds = Math.max(0, state.activeRoute.duration * remainingRatio);
+    updateEtaChip(remainingSeconds);
+    maybeAnnounceEta(remainingSeconds);
+    updateManeuverChip(progress.index);
+    maybeAnnounceStreet(progress.index);
+    maybeAnnounceNextManeuver(progress.index);
+    maybeAnnounceCameraAlert();
+  }
+
+  function getRouteProgress(lat, lng) {
+    const index = findClosestRouteIndex(lat, lng, state.routeLatLngs);
+    return {
+      index,
+      distanceFeet: state.routePointDistances[index] || 0
+    };
+  }
+
+  function updateEtaChip(remainingSeconds) {
+    if (!els.etaChip) return;
+    if (!state.activeRoute) {
+      els.etaChip.textContent = "ETA --";
+      return;
+    }
+    const arrival = new Date(Date.now() + Math.max(0, remainingSeconds) * 1000);
+    const time = arrival.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    els.etaChip.textContent = `ETA ${time} / ${formatDurationShort(remainingSeconds)}`;
+  }
+
+  function updateManeuverChip(routeIndex = 0) {
+    if (!els.maneuverChip) return;
+    const next = getNextStep(routeIndex);
+    if (!next) {
+      els.maneuverChip.textContent = "next turn: route inactive";
+      return;
+    }
+    const feet = state.lastPosition ? distanceFeet(state.lastPosition.lat, state.lastPosition.lng, next.latlng[0], next.latlng[1]) : next.distance * 3.28084;
+    els.maneuverChip.textContent = `${formatDistance(feet)}: ${next.instruction}`;
+  }
+
+  function maybeAnnounceNextManeuver(routeIndex) {
+    const next = getNextStep(routeIndex);
+    if (!next || state.spokenStepIds.has(next.id)) return;
+    const feet = distanceFeet(state.lastPosition.lat, state.lastPosition.lng, next.latlng[0], next.latlng[1]);
+    const isArrival = next.instruction.toLowerCase().includes("arrive");
+    if (feet > (isArrival ? 350 : 950)) return;
+    state.spokenStepIds.add(next.id);
+    enqueueSpeech(`In ${formatDistanceSpeech(feet)}, ${next.instruction}.`, "direction");
+  }
+
+  function maybeAnnounceStreet(routeIndex) {
+    const current = getCurrentStep(routeIndex);
+    const street = current?.name?.trim();
+    const now = Date.now();
+    if (!street || street === state.lastStreetName || now - state.lastStreetAnnounceAt < 30000) return;
+    state.lastStreetName = street;
+    state.lastStreetAnnounceAt = now;
+    enqueueSpeech(`Continue on ${street}.`, "direction");
+  }
+
+  function maybeAnnounceEta(remainingSeconds) {
+    const now = Date.now();
+    if (!state.routeEtaAnnounceInterval || now - state.lastEtaAnnounceAt < state.routeEtaAnnounceInterval) return;
+    state.lastEtaAnnounceAt = now;
+    enqueueSpeech(`Updated ETA is ${formatDurationSpeech(remainingSeconds)}.`, "eta");
+  }
+
+  function maybeAnnounceCameraAlert() {
+    const now = Date.now();
+    if (now - state.lastCameraAlertAt < 12000) return;
+    const camera = getNearestAlertCamera();
+    if (!camera) return;
+
+    const thresholds = [50, 100, 1320, 2640, 5280];
+    for (const threshold of thresholds) {
+      if (camera.feet > threshold) continue;
+      const key = `${camera.cam.id}:${threshold}`;
+      if (state.cameraAlertHistory.has(key)) continue;
+      state.cameraAlertHistory.add(key);
+      state.lastCameraAlertAt = now;
+      enqueueSpeech(`Flock camera ${formatDistanceSpeech(camera.feet)} ahead.`, "camera");
+      return;
+    }
+  }
+
+  function getNearestAlertCamera() {
+    if (!state.lastPosition || !state.cameras.length) return null;
+    let best = null;
+    let bestFeet = Infinity;
+    const routeOnly = state.routeCameraIds.size > 0;
+
+    for (const cam of state.cameras) {
+      if (routeOnly && !state.routeCameraIds.has(cam.id)) continue;
+      if (!(cam.brand || "").toLowerCase().includes("flock")) continue;
+      const feet = distanceFeet(state.lastPosition.lat, state.lastPosition.lng, cam.lat, cam.lng);
+      if (feet < bestFeet) {
+        best = cam;
+        bestFeet = feet;
+      }
+    }
+
+    if (!best || bestFeet > 5280) return null;
+    return { cam: best, feet: bestFeet };
+  }
+
+  function getNextStep(routeIndex) {
+    return state.routeSteps.find((step) => step.routeIndex >= routeIndex && step.instruction && !step.instruction.toLowerCase().startsWith("start"));
+  }
+
+  function getCurrentStep(routeIndex) {
+    let current = null;
+    for (const step of state.routeSteps) {
+      if (step.routeIndex > routeIndex) break;
+      current = step;
+    }
+    return current;
+  }
+
+  function findClosestRouteIndex(lat, lng, routeLatLngs) {
+    if (!routeLatLngs.length) return 0;
+    let bestIndex = 0;
+    let bestFeet = Infinity;
+    for (let i = 0; i < routeLatLngs.length; i += 1) {
+      const point = routeLatLngs[i];
+      const feet = distanceFeet(lat, lng, point[0], point[1]);
+      if (feet < bestFeet) {
+        bestFeet = feet;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
+  }
+
+  function enqueueSpeech(text, type = "info") {
+    if (!("speechSynthesis" in window) || !window.SpeechSynthesisUtterance) return;
+    const item = { text, type };
+    if (type === "direction") {
+      const firstNonDirection = state.speechQueue.findIndex((queued) => queued.type !== "direction");
+      if (firstNonDirection === -1) state.speechQueue.push(item);
+      else state.speechQueue.splice(firstNonDirection, 0, item);
+    } else {
+      state.speechQueue.push(item);
+    }
+    speakNext();
+  }
+
+  function speakNext() {
+    if (state.speechSpeaking || !state.speechQueue.length || !("speechSynthesis" in window)) return;
+    const item = state.speechQueue.shift();
+    const utterance = new SpeechSynthesisUtterance(item.text);
+    utterance.rate = item.type === "direction" ? 0.95 : 0.92;
+    utterance.pitch = 1;
+    utterance.onend = () => {
+      state.speechSpeaking = false;
+      speakNext();
+    };
+    utterance.onerror = () => {
+      state.speechSpeaking = false;
+      speakNext();
+    };
+    state.speechSpeaking = true;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function getCamerasNearRoute(routeLatLngs, thresholdFeet) {
+    if (!routeLatLngs.length || !state.cameras.length) return [];
+    const routeBounds = L.latLngBounds(routeLatLngs).pad(0.08);
+    const candidates = [];
+
+    for (const cam of state.cameras) {
+      if (!routeBounds.contains([cam.lat, cam.lng])) continue;
+      const feet = distanceToRouteFeet(cam.lat, cam.lng, routeLatLngs);
+      if (feet <= thresholdFeet) candidates.push({ cam, feet });
+    }
+
+    return candidates.sort((a, b) => a.feet - b.feet);
+  }
+
+  function distanceToRouteFeet(lat, lng, routeLatLngs) {
+    let best = Infinity;
+    for (let i = 1; i < routeLatLngs.length; i += 1) {
+      const distance = distancePointToSegmentFeet(lat, lng, routeLatLngs[i - 1], routeLatLngs[i]);
+      if (distance < best) best = distance;
+    }
+    return best;
+  }
+
+  function distancePointToSegmentFeet(lat, lng, a, b) {
+    const metersPerDegreeLat = 111320;
+    const metersPerDegreeLng = 111320 * Math.cos((lat * Math.PI) / 180);
+    const px = 0;
+    const py = 0;
+    const ax = (a[1] - lng) * metersPerDegreeLng;
+    const ay = (a[0] - lat) * metersPerDegreeLat;
+    const bx = (b[1] - lng) * metersPerDegreeLng;
+    const by = (b[0] - lat) * metersPerDegreeLat;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lengthSq = dx * dx + dy * dy;
+    if (!lengthSq) return Math.sqrt(ax * ax + ay * ay) * 3.28084;
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+    const x = ax + t * dx;
+    const y = ay + t * dy;
+    return Math.sqrt(x * x + y * y) * 3.28084;
+  }
+
   function renderBrandBars() {
     const counts = new Map();
     for (const cam of state.cameras) {
@@ -1040,6 +1766,35 @@
     if (!Number.isFinite(feet)) return "--";
     if (feet < 1000) return `${Math.round(feet)} ft`;
     return `${(feet / 5280).toFixed(feet < 5280 * 10 ? 2 : 1)} mi`;
+  }
+
+  function formatDistanceSpeech(feet) {
+    if (!Number.isFinite(feet)) return "nearby";
+    if (feet <= 75) return `${Math.round(feet)} feet`;
+    if (feet < 1000) return `${Math.round(feet / 50) * 50} feet`;
+    const miles = feet / 5280;
+    return `${miles.toFixed(miles < 1 ? 2 : 1)} miles`;
+  }
+
+  function formatDurationShort(seconds) {
+    if (!Number.isFinite(seconds)) return "--";
+    const minutes = Math.max(0, Math.round(seconds / 60));
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}h ${mins}m`;
+  }
+
+  function formatDurationSpeech(seconds) {
+    if (!Number.isFinite(seconds)) return "unknown";
+    const minutes = Math.max(0, Math.round(seconds / 60));
+    if (minutes < 1) return "less than one minute";
+    if (minutes === 1) return "one minute";
+    if (minutes < 60) return `${minutes} minutes`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (!mins) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+    return `${hours} ${hours === 1 ? "hour" : "hours"} and ${mins} minutes`;
   }
 
   function formatNumber(num) {

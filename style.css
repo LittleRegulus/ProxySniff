@@ -278,7 +278,7 @@ p { color: var(--muted); line-height: 1.55; }
   gap: 12px;
   margin-bottom: 14px;
 }
-.brand-panel, .feed-preview, .scanner-card, .settings-card { padding: 18px; margin-bottom: 14px; }
+.brand-panel, .feed-preview, .scanner-card, .settings-card, .pinned-panel { padding: 18px; margin-bottom: 14px; }
 .tiny-badge, .scan-state, .mode-badge {
   display: inline-flex;
   align-items: center;
@@ -458,6 +458,22 @@ p { color: var(--muted); line-height: 1.55; }
   display: flex;
   gap: 8px;
 }
+.route-searchbar {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.route-searchbar label {
+  color: var(--green);
+  font-size: .74rem;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.searchbar-row {
+  display: flex;
+  gap: 8px;
+}
 .searchbar input, .setting-row select {
   width: 100%;
   min-height: 48px;
@@ -502,6 +518,9 @@ p { color: var(--muted); line-height: 1.55; }
 .leaflet-control-attribution { background: rgba(8, 10, 17, .74) !important; color: rgba(255,255,255,.65) !important; }
 .leaflet-control-attribution a { color: var(--cyan) !important; }
 .camera-marker { filter: drop-shadow(0 0 8px rgba(0, 169, 255, .75)); }
+.route-line { filter: drop-shadow(0 0 12px rgba(255, 178, 57, .5)); }
+.route-camera-marker { filter: drop-shadow(0 0 12px rgba(255, 178, 57, .76)); }
+.destination-marker { filter: drop-shadow(0 0 14px rgba(255, 178, 57, .82)); }
 .user-marker { filter: drop-shadow(0 0 10px rgba(255,90,111,.8)); }
 
 .map-hud {
@@ -526,6 +545,18 @@ p { color: var(--muted); line-height: 1.55; }
   font-weight: 900;
   font-size: .76rem;
 }
+#maneuverChip {
+  max-width: min(84vw, 560px);
+  color: #001018;
+  background: linear-gradient(135deg, rgba(255, 178, 57, .96), rgba(46, 255, 200, .86));
+  border-color: rgba(255,255,255,.22);
+  white-space: normal;
+}
+#etaChip {
+  color: #001018;
+  background: rgba(66, 244, 255, .9);
+  border-color: rgba(255,255,255,.24);
+}
 .top-left { top: 12px; left: 12px; }
 .bottom-left { left: 12px; bottom: 12px; }
 .floating-btn {
@@ -541,6 +572,170 @@ p { color: var(--muted); line-height: 1.55; }
   box-shadow: var(--shadow);
   font-weight: 900;
   font-size: 1.2rem;
+}
+.pin-btn {
+  right: 76px;
+  bottom: 18px;
+  color: var(--green);
+  border-color: rgba(46,255,200,.28);
+}
+.stop-nav-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 10;
+  transform: translateX(-50%);
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 90, 111, .38);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(255, 90, 111, .88);
+  box-shadow: 0 16px 42px rgba(255, 90, 111, .24);
+  font-weight: 950;
+  cursor: pointer;
+}
+.stop-nav-btn[hidden] { display: none !important; }
+
+.pinned-list {
+  position: relative;
+  display: grid;
+  gap: 12px;
+}
+.pin-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(255,255,255,.045);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.pin-thumb {
+  width: 86px;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 16px;
+  color: var(--green);
+  font-weight: 950;
+  background: rgba(46,255,200,.08);
+  border: 1px solid rgba(46,255,200,.18);
+}
+.pin-thumb img, .pin-preview img, .pin-popup img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pin-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.pin-copy strong { font-size: 1rem; }
+.pin-copy span, .pin-copy small, .pin-copy p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.pin-copy span, .pin-copy small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.pin-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pin-actions .primary-btn, .pin-actions .ghost-btn {
+  min-height: 40px;
+  padding: 9px 12px;
+  border-radius: 12px;
+}
+.danger-ghost {
+  color: #ffc9d0;
+  border-color: rgba(255,90,111,.3);
+  background: rgba(255,90,111,.08);
+}
+.empty-pins {
+  display: grid;
+  gap: 4px;
+  padding: 18px;
+  border-radius: 16px;
+  color: var(--muted);
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.06);
+}
+.empty-pins strong { color: var(--text); }
+
+.pin-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0,0,0,.62);
+  backdrop-filter: blur(14px);
+}
+.pin-modal[hidden] { display: none !important; }
+.pin-editor {
+  width: min(460px, 100%);
+  padding: 18px;
+}
+.pin-editor label {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-weight: 800;
+  font-size: .82rem;
+}
+.pin-editor input, .pin-editor textarea {
+  width: 100%;
+  color: var(--text);
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  padding: 12px 14px;
+  outline: none;
+}
+.pin-editor textarea { resize: vertical; }
+.pin-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  margin-bottom: 10px;
+  border-radius: 18px;
+  color: var(--muted);
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  font-size: .78rem;
+  text-align: center;
+}
+.pin-meta {
+  position: relative;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: .75rem;
+  line-height: 1.45;
+}
+.saved-pin-marker { filter: drop-shadow(0 0 12px rgba(46,255,200,.75)); }
+.pin-popup img {
+  display: block;
+  aspect-ratio: 16 / 10;
+  border-radius: 12px;
+  margin-bottom: 4px;
 }
 
 .setting-row {
@@ -621,9 +816,12 @@ p { color: var(--muted); line-height: 1.55; }
 @media (max-width: 410px) {
   .topbar-title small { display: none; }
   .pill { padding: 8px 9px; font-size: .68rem; }
-  .hero-card, .brand-panel, .feed-preview, .scanner-card, .settings-card { padding: 15px; }
+  .hero-card, .brand-panel, .feed-preview, .scanner-card, .settings-card, .pinned-panel { padding: 15px; }
   .map-wrap { min-height: 500px; height: 70vh; }
   .terminal { font-size: .74rem; }
+  .pin-card { grid-template-columns: 72px 1fr; }
+  .pin-thumb { width: 72px; }
+  .stop-nav-btn { bottom: 82px; }
 }
 
 /* ProxySniff v1.1 map hardening: keeps Leaflet usable even if CDN CSS loads late/fails. */
@@ -794,6 +992,16 @@ p { color: var(--muted); line-height: 1.55; }
 .map-fullscreen #recenterBtn {
   right: calc(14px + env(safe-area-inset-right));
   bottom: calc(18px + env(safe-area-inset-bottom));
+}
+.map-fullscreen #pinSpotBtn {
+  right: calc(76px + env(safe-area-inset-right));
+  bottom: calc(18px + env(safe-area-inset-bottom));
+}
+.map-fullscreen #stopNavigationBtn {
+  bottom: calc(18px + env(safe-area-inset-bottom));
+}
+.map-fullscreen .pin-modal {
+  z-index: 10000;
 }
 
 /* ProxySniff v1.2: keep Leaflet zoom controls above the recenter button. */

@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://unpkg.com" />
   <link rel="preconnect" href="https://basemaps.cartocdn.com" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ1JEjA4vfQUqvXNccZhcBcBZddR0wI=" crossorigin="" />
-  <link rel="stylesheet" href="style.css?v=1.6.1" />
+  <link rel="stylesheet" href="style.css?v=1.9.0" />
 </head>
 <body>
   <div class="scanlines" aria-hidden="true"></div>
@@ -52,6 +52,7 @@
       <button data-nav="dashboard">Dashboard</button>
       <button data-nav="scanner">Scanner</button>
       <button data-nav="map">Heat Map</button>
+      <button data-nav="pinned">Pinned Spots</button>
       <button data-nav="settings">Settings</button>
     </section>
 
@@ -185,6 +186,13 @@
           <input id="addressInput" autocomplete="off" placeholder="Search address, city, or zip..." />
           <button type="submit" aria-label="Search map">⌕</button>
         </form>
+        <form class="searchbar route-searchbar" id="destinationForm">
+          <label for="destinationInput">Enter your destination</label>
+          <div class="searchbar-row">
+            <input id="destinationInput" autocomplete="off" placeholder="Route to address or place..." />
+            <button type="submit" aria-label="Map route">⌕</button>
+          </div>
+        </form>
       </section>
 
       <section class="map-wrap panel">
@@ -193,13 +201,31 @@
           <span id="coordsChip">LAT -- / LNG --</span>
           <span id="areaChip">loading camera pack...</span>
           <span id="flockChip">Flock ~ scanning...</span>
+          <span id="routeChip" hidden>route: idle</span>
         </div>
         <div class="map-hud bottom-left">
+          <span id="maneuverChip">next turn: route inactive</span>
+          <span id="etaChip">ETA --</span>
           <span id="visibleChip">0 cameras rendered</span>
           <span id="followChip">follow: off</span>
         </div>
         <button class="floating-btn fullscreen-btn" id="fullscreenMapBtn" type="button" aria-label="Toggle fullscreen map">⛶</button>
+        <button class="floating-btn pin-btn" id="pinSpotBtn" type="button" aria-label="Save pinned spot">📍</button>
         <button class="floating-btn" id="recenterBtn" type="button" aria-label="Recenter map">⌖</button>
+        <button class="stop-nav-btn" id="stopNavigationBtn" type="button" hidden>× Stop Navigation</button>
+      </section>
+    </section>
+
+    <section class="view view-pinned" id="view-pinned">
+      <section class="panel pinned-panel">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Saved Locations</span>
+            <h2>Pinned Spots</h2>
+          </div>
+          <button class="primary-btn" id="newPinBtn" type="button">Add Pin</button>
+        </div>
+        <div id="pinnedList" class="pinned-list"></div>
       </section>
     </section>
 
@@ -251,9 +277,41 @@
       <button class="nav-btn" data-nav="map"><span>🗺</span>Heat Map</button>
       <button class="nav-btn" data-nav="settings"><span>⚙</span>Settings</button>
     </nav>
+
+    <div class="pin-modal" id="pinModal" hidden>
+      <form class="pin-editor panel" id="pinForm">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Map Pin</span>
+            <h2>Save Spot</h2>
+          </div>
+          <button class="icon-btn" id="closePinModalBtn" type="button" aria-label="Close pin editor">×</button>
+        </div>
+        <label>
+          <span>Name</span>
+          <input id="pinNameInput" maxlength="80" required placeholder="Pinned spot name" />
+        </label>
+        <label>
+          <span>Description</span>
+          <textarea id="pinDescriptionInput" maxlength="220" rows="3" placeholder="Short note about this spot"></textarea>
+        </label>
+        <label>
+          <span>Photo</span>
+          <input id="pinPhotoInput" type="file" accept="image/*" capture="environment" />
+        </label>
+        <div class="pin-preview" id="pinPreview">
+          <span>No photo selected</span>
+        </div>
+        <div class="pin-meta" id="pinMeta">Location waiting...</div>
+        <div class="control-row">
+          <button class="primary-btn" type="submit">Save Pin</button>
+          <button class="ghost-btn" id="cancelPinBtn" type="button">Cancel</button>
+        </div>
+      </form>
+    </div>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="script.js?v=1.6.0" defer></script>
+  <script src="script.js?v=1.9.0" defer></script>
 </body>
 </html>
