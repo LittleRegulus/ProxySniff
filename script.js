@@ -186,7 +186,6 @@
     pinDestinationBtn: $("#pinDestinationBtn"),
     addressForm: $("#addressForm"),
     addressInput: $("#addressInput"),
-    addressSuggestions: $("#addressSuggestions"),
     destinationForm: $("#destinationForm"),
     destinationInput: $("#destinationInput"),
     destinationSuggestions: $("#destinationSuggestions"),
@@ -252,7 +251,6 @@
     els.demoDriveBtn.addEventListener("click", toggleDemoDrive);
     els.addressForm.addEventListener("submit", searchAddress);
     els.destinationForm.addEventListener("submit", routeToDestination);
-    wirePlaceSuggestions("address", els.addressInput, els.addressSuggestions);
     wirePlaceSuggestions("destination", els.destinationInput, els.destinationSuggestions);
     els.newPinBtn?.addEventListener("click", () => {
       navigate("map");
@@ -1566,8 +1564,8 @@
 
   function hidePlaceSuggestions(kind = null) {
     const lists = kind
-      ? [kind === "address" ? els.addressSuggestions : els.destinationSuggestions]
-      : [els.addressSuggestions, els.destinationSuggestions];
+      ? [kind === "destination" ? els.destinationSuggestions : null]
+      : [els.destinationSuggestions];
     lists.forEach((list) => {
       if (list) list.hidden = true;
     });

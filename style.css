@@ -508,12 +508,12 @@ p { color: var(--muted); line-height: 1.55; }
   width: min(680px, calc(100vw - 48px));
   max-height: 344px;
   overflow: auto;
-  padding: 6px;
+  padding: 8px;
   border-radius: 14px;
-  background: rgba(7, 11, 18, .96);
-  border: 1px solid rgba(255,255,255,.14);
-  box-shadow: 0 18px 48px rgba(0,0,0,.42);
-  backdrop-filter: blur(14px);
+  background: rgba(6, 10, 16, .985);
+  border: 1px solid rgba(66,244,255,.2);
+  box-shadow: 0 18px 48px rgba(0,0,0,.58);
+  backdrop-filter: blur(18px) saturate(1.15);
 }
 .route-searchbar .place-suggestions {
   top: calc(100% + 4px);
@@ -528,14 +528,15 @@ p { color: var(--muted); line-height: 1.55; }
   min-height: 48px;
   padding: 8px 10px;
   border-radius: 10px;
-  border: 0;
   text-align: left;
   color: var(--text);
-  background: transparent;
+  background: rgba(255,255,255,.055);
+  border: 1px solid rgba(255,255,255,.07);
 }
 .place-suggestions .place-suggestion:hover,
 .place-suggestions .place-suggestion:focus {
-  background: rgba(66,244,255,.08);
+  background: rgba(66,244,255,.14);
+  border-color: rgba(66,244,255,.2);
 }
 .place-suggestions .place-suggestion strong,
 .place-suggestions .place-suggestion span {
