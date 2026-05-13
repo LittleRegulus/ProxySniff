@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const APP_VERSION = "1.9.2";
+  const APP_VERSION = "1.9.3";
   const PINS_STORAGE_KEY = "proxysniff_pinned_spots";
 
   const CAMERA_PACKS = {
@@ -117,6 +117,9 @@
     speechSpeaking: false,
     speechUnlocked: false,
     speechEnabled: false,
+    wakeLock: null,
+    wakeLockWanted: false,
+    wakeLockSupported: "wakeLock" in navigator,
     pins: [],
     activePinDraft: null,
     placeSearch: {
@@ -223,7 +226,7 @@
     }, 900);
 
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
-      navigator.serviceWorker.register("./service-worker.js?v=1.9.2").catch(() => {});
+      navigator.serviceWorker.register("./service-worker.js?v=1.9.3").catch(() => {});
     }
   }
 
@@ -291,7 +294,10 @@
     });
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) stopScanner(false);
-      else if (state.fakeFeedEnabled) startScanner(false);
+      else {
+        if (state.fakeFeedEnabled) startScanner(false);
+        syncScreenWakeLock();
+      }
     });
     document.addEventListener("pointerdown", (event) => {
       if (!event.target.closest(".searchbar")) hidePlaceSuggestions();
@@ -1609,13 +1615,18 @@
   async function routeToDestination(event) {
     event.preventDefault();
     unlockSpeech(false);
+    requestScreenWakeLock();
     const query = els.destinationInput.value.trim();
-    if (!query) return;
+    if (!query) {
+      releaseScreenWakeLock();
+      return;
+    }
 
     try {
       const destination = getSelectedPlace("destination", els.destinationInput) || await geocodePlace(query);
       hidePlaceSuggestions("destination");
       if (!destination) {
+        releaseScreenWakeLock();
         initMapOnce();
         els.runtimeLabel.textContent = "destination not found";
         setRouteChip("route: destination not found");
@@ -1623,6 +1634,7 @@
       }
       await routeToPoint(destination);
     } catch (error) {
+      releaseScreenWakeLock();
       console.warn(error);
       els.runtimeLabel.textContent = "route failed";
       setRouteChip("route: mapping failed");
@@ -1632,18 +1644,56 @@
   async function routeToPoint(destination) {
     initMapOnce();
     ensureLocationWatch();
+    requestScreenWakeLock();
     els.runtimeLabel.textContent = "routing destination";
     setRouteChip("route: finding destination");
 
     const origin = await getRouteOrigin();
     if (!origin) {
+      releaseScreenWakeLock();
       els.runtimeLabel.textContent = "GPS needed for route";
       setRouteChip("route: current location needed");
       return;
     }
-    setRouteChip("route: mapping drive");
-    const route = await fetchDrivingRoute(origin, destination);
-    drawRoute(origin, destination, route);
+    try {
+      setRouteChip("route: mapping drive");
+      const route = await fetchDrivingRoute(origin, destination);
+      drawRoute(origin, destination, route);
+    } catch (error) {
+      releaseScreenWakeLock();
+      throw error;
+    }
+  }
+
+  async function requestScreenWakeLock() {
+    state.wakeLockWanted = true;
+    if (!state.wakeLockSupported || document.hidden || state.wakeLock) return;
+
+    try {
+      state.wakeLock = await navigator.wakeLock.request("screen");
+      state.wakeLock.addEventListener("release", () => {
+        state.wakeLock = null;
+      });
+    } catch (error) {
+      state.wakeLock = null;
+      console.warn("Screen wake lock unavailable:", error);
+    }
+  }
+
+  async function releaseScreenWakeLock() {
+    state.wakeLockWanted = false;
+    const lock = state.wakeLock;
+    state.wakeLock = null;
+    if (!lock) return;
+    try {
+      await lock.release();
+    } catch (error) {
+      console.warn("Screen wake lock release failed:", error);
+    }
+  }
+
+  function syncScreenWakeLock() {
+    if (state.wakeLockWanted && state.activeRoute) requestScreenWakeLock();
   }
 
   async function geocodePlace(query) {
@@ -1790,6 +1840,7 @@
   }
 
   function stopNavigation() {
+    releaseScreenWakeLock();
     state.activeRoute = null;
     updatePinDestinationButton();
     state.routeLatLngs = [];

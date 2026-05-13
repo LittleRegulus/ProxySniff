@@ -1,4 +1,4 @@
-const CACHE_NAME = "proxysniff-v1.9.2";
+const CACHE_NAME = "proxysniff-v1.9.3";
 const SHELL_CACHE = [
   "./",
   "./index.html",
